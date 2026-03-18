@@ -1,0 +1,658 @@
+[
+  {
+    "field_id": 1,
+    "loc": "P003",
+    "original": "浙江",
+    "context": "根据【浙江】省工业和信息化厅专精特新中小企",
+    "max_len_hint": 2,
+    "link_key": "浙江"
+  },
+  {
+    "field_id": 2,
+    "loc": "P005",
+    "original": "浙江达航数据技术有限公司",
+    "context": "【浙江达航数据技术有限公司】",
+    "max_len_hint": 12,
+    "link_key": "浙江达航数据技术有限公司"
+  },
+  {
+    "field_id": 3,
+    "loc": "P007",
+    "original": "轨道交通一体化智能锂电电源系统",
+    "context": "【轨道交通一体化智能锂电电源系统】",
+    "max_len_hint": 15,
+    "link_key": "轨道交通一体化智能锂电电源系统"
+  },
+  {
+    "field_id": 4,
+    "loc": "P009",
+    "original": "6101020600",
+    "context": "【6101020600】",
+    "max_len_hint": 10,
+    "link_key": "6101020600"
+  },
+  {
+    "field_id": 5,
+    "loc": "P013",
+    "original": "2291.22",
+    "context": "【2291.22】",
+    "max_len_hint": 7,
+    "link_key": "2291.22"
+  },
+  {
+    "field_id": 6,
+    "loc": "P017",
+    "original": "40100",
+    "context": "【40100】",
+    "max_len_hint": 5,
+    "link_key": "40100"
+  },
+  {
+    "field_id": 7,
+    "loc": "P021",
+    "original": "5.71%",
+    "context": "【5.71%】",
+    "max_len_hint": 5,
+    "link_key": "5.71%"
+  },
+  {
+    "field_id": 8,
+    "loc": "P025",
+    "original": "第三名",
+    "context": "【第三名】",
+    "max_len_hint": 3,
+    "link_key": "第三名"
+  },
+  {
+    "field_id": 9,
+    "loc": "P029",
+    "original": "3514.73",
+    "context": "【3514.73】",
+    "max_len_hint": 7,
+    "link_key": "3514.73"
+  },
+  {
+    "field_id": 10,
+    "loc": "P033",
+    "original": "43500",
+    "context": "【43500】",
+    "max_len_hint": 5,
+    "link_key": "43500"
+  },
+  {
+    "field_id": 11,
+    "loc": "P037",
+    "original": "8.08%",
+    "context": "【8.08%】",
+    "max_len_hint": 5,
+    "link_key": "8.08%"
+  },
+  {
+    "field_id": 12,
+    "loc": "P041",
+    "original": "第三名",
+    "context": "【第三名】",
+    "max_len_hint": 3,
+    "link_key": "第三名"
+  },
+  {
+    "field_id": 13,
+    "loc": "P045",
+    "original": "7551.03",
+    "context": "【7551.03】",
+    "max_len_hint": 7,
+    "link_key": "7551.03"
+  },
+  {
+    "field_id": 14,
+    "loc": "P049",
+    "original": "47200",
+    "context": "【47200】",
+    "max_len_hint": 5,
+    "link_key": "47200"
+  },
+  {
+    "field_id": 15,
+    "loc": "P053",
+    "original": "16.00%",
+    "context": "【16.00%】",
+    "max_len_hint": 6,
+    "link_key": "16.00%"
+  },
+  {
+    "field_id": 16,
+    "loc": "P057",
+    "original": "第一名",
+    "context": "【第一名】",
+    "max_len_hint": 3,
+    "link_key": "第一名"
+  },
+  {
+    "field_id": 17,
+    "loc": "P059",
+    "original": "①Railway Battery Management Systems Market - Global Forecast 2026-2032 ",
+    "context": "【①Railway Battery Management Systems Market - Global Forecast 2026-2032 】",
+    "max_len_hint": 71,
+    "link_key": "①Railway Battery Management Systems Market - Global Forecast 2026-2032 "
+  },
+  {
+    "field_id": 18,
+    "loc": "P060",
+    "original": "②全球与中国轨道交通装备市场现状及未来发展趋势",
+    "context": "【②全球与中国轨道交通装备市场现状及未来发展趋势】",
+    "max_len_hint": 23,
+    "link_key": "②全球与中国轨道交通装备市场现状及未来发展趋势"
+  },
+  {
+    "field_id": 19,
+    "loc": "P064",
+    "original": "2026 年 3 月15 日",
+    "context": "【2026 年 3 月15 日】",
+    "max_len_hint": 14,
+    "link_key": "2026 年 3 月15 日"
+  },
+  {
+    "field_id": 20,
+    "loc": "P067",
+    "original": "浙江达航数据技术有限公司成立于2021年，专注于智能锂电电源及储能系统的设计、研发与制造。自成立以来，公司深耕轨道交通领域锂电电源创新方案，拥有自主品牌“达航易维”，现为国内细分市场龙头企业。作为国家高新技术企业及宁波市“专精特新”企业认定，目前产品已应用于多条地铁新建线路，成为该领域创新方案的引领者。",
+    "context": "【浙江达航数据技术有限公司成立于2021年，专注于智能锂电电源及储能系统的设计、研发与制造。自成立以来，公司深耕轨道交通领域锂电电源创新方案，拥有自主品牌“达航易维”，现为国内细分市场龙头企业。作为国家高新技术企业及宁波市“专精特新”企业认定，目前产品已应用于多条地铁新建线路，成为该领域创新方案的引领者。】",
+    "max_len_hint": 152,
+    "link_key": "浙江达航数据技术有限公司成立于2021年，专注于智能锂电电源及储能系统的设计、研发与制造。自成立以来，公司深耕轨道交通领域锂电电源创新方案，拥有自主品牌“达航易维”，现为国内细分市场龙头企业。作为国家高新技术企业及宁波市“专精特新”企业认定，目前产品已应用于多条地铁新建线路，成为该领域创新方案的引领者。"
+  },
+  {
+    "field_id": 21,
+    "loc": "P070",
+    "original": "轨道交通一体化智能锂电电源系统",
+    "context": "我司主导产品——【轨道交通一体化智能锂电电源系统】，国家统计局《统计用产品分类目",
+    "max_len_hint": 15,
+    "link_key": "轨道交通一体化智能锂电电源系统"
+  },
+  {
+    "field_id": 22,
+    "loc": "P070",
+    "original": "6101020600",
+    "context": "计局《统计用产品分类目录》代码【6101020600】。",
+    "max_len_hint": 10,
+    "link_key": "6101020600"
+  },
+  {
+    "field_id": 23,
+    "loc": "P072",
+    "original": "根据 Railway Battery Management Systems Market - Global Forecast 2026-2032 报告的数据，全球轨道交通电源系统市场规模从2025年的3.4842亿美元增长至2026年的3.8139亿美元，预计到2032年将以8.41%的复合年增长率增长至6.1327亿美元。采用2026年3月15日的汇率（1美元=7.0875人民币）并按上述复合增长率向前推算，2023年到2025年全球轨道交通电源系统市场规模分别为：21.01亿元、22.78亿元、24.70亿元。",
+    "context": "【根据 Railway Battery Management Systems Market - Global Forecast 2026-2032 报告的数据，全球轨道交通电源系统市场规模从2025年的3.4842亿美元增长至2026年的3.8139亿美元，预计到2032年将以8.41%的复合年增长率增长至6.1327亿美元。采用2026年3月15日的汇率（1美元=7.0875人民币）并按上述复合增长率向前推算，2023年到2025年全球轨道交通电源系统市场规模分别为：21.01亿元、22.78亿元、24.70亿元。】",
+    "max_len_hint": 260,
+    "link_key": "根据 Railway Battery Management Systems Market - Global Forecast 2026-2032 报告的数据，全球轨道交通电源系统市场规模从2025年的3.4842亿美元增长至2026年的3.8139亿美元，预计到2032年将以8.41%的复合年增长率增长至6.1327亿美元。采用2026年3月15日的汇率（1美元=7.0875人民币）并按上述复合增长率向前推算，2023年到2025年全球轨道交通电源系统市场规模分别为：21.01亿元、22.78亿元、24.70亿元。"
+  },
+  {
+    "field_id": 24,
+    "loc": "P073",
+    "original": "图表1 2023-2025年全球轨道交通电源系统行业市场规模（亿元）",
+    "context": "【图表1 2023-2025年全球轨道交通电源系统行业市场规模（亿元）】",
+    "max_len_hint": 34,
+    "link_key": "图表1 2023-2025年全球轨道交通电源系统行业市场规模（亿元）"
+  },
+  {
+    "field_id": 25,
+    "loc": "P074",
+    "original": "",
+    "context": "【】",
+    "max_len_hint": 0,
+    "link_key": null
+  },
+  {
+    "field_id": 26,
+    "loc": "P075",
+    "original": "数据来源：https://www.researchandmarkets.com/reports/6118613/railway-battery-management-systems-market#rela0-6081603",
+    "context": "【数据来源：https://www.researchandmarkets.com/reports/6118613/railway-battery-management-systems-market#rela0-6081603】",
+    "max_len_hint": 111,
+    "link_key": "数据来源：https://www.researchandmarkets.com/reports/6118613/railway-battery-management-systems-market#rela0-6081603"
+  },
+  {
+    "field_id": 27,
+    "loc": "P076",
+    "original": "来源网址：Railway Battery Management Systems Market - Global Forecast 2026-2032",
+    "context": "【来源网址：Railway Battery Management Systems Market - Global Forecast 2026-2032】",
+    "max_len_hint": 74,
+    "link_key": "来源网址：Railway Battery Management Systems Market - Global Forecast 2026-2032"
+  },
+  {
+    "field_id": 28,
+    "loc": "P077",
+    "original": "根据QYR（恒州博智）的统计，在轨道交通装备市场中，中国市场在全球的占比为19.09%。以此占比来推算，中国轨道交通电源系统市场规模在2023年到2025年分别为：4.01亿元、4.35亿元、4.72亿元。",
+    "context": "【根据QYR（恒州博智）的统计，在轨道交通装备市场中，中国市场在全球的占比为19.09%。以此占比来推算，中国轨道交通电源系统市场规模在2023年到2025年分别为：4.01亿元、4.35亿元、4.72亿元。】",
+    "max_len_hint": 103,
+    "link_key": "根据QYR（恒州博智）的统计，在轨道交通装备市场中，中国市场在全球的占比为19.09%。以此占比来推算，中国轨道交通电源系统市场规模在2023年到2025年分别为：4.01亿元、4.35亿元、4.72亿元。"
+  },
+  {
+    "field_id": 29,
+    "loc": "P078",
+    "original": "图表2 2023-2025年中国轨道交通电源系统行业市场规模（亿元）",
+    "context": "【图表2 2023-2025年中国轨道交通电源系统行业市场规模（亿元）】",
+    "max_len_hint": 34,
+    "link_key": "图表2 2023-2025年中国轨道交通电源系统行业市场规模（亿元）"
+  },
+  {
+    "field_id": 30,
+    "loc": "P079",
+    "original": "",
+    "context": "【】",
+    "max_len_hint": 0,
+    "link_key": null
+  },
+  {
+    "field_id": 31,
+    "loc": "P080",
+    "original": "数据来源：https://juejin.cn/post/7439556589445595177?from=search-suggest ",
+    "context": "【数据来源：https://juejin.cn/post/7439556589445595177?from=search-suggest 】",
+    "max_len_hint": 68,
+    "link_key": "数据来源：https://juejin.cn/post/7439556589445595177?from=search-suggest "
+  },
+  {
+    "field_id": 32,
+    "loc": "P081",
+    "original": "来源网址：全球与中国轨道交通装备市场现状及未来发展趋势",
+    "context": "【来源网址：全球与中国轨道交通装备市场现状及未来发展趋势】",
+    "max_len_hint": 27,
+    "link_key": "来源网址：全球与中国轨道交通装备市场现状及未来发展趋势"
+  },
+  {
+    "field_id": 33,
+    "loc": "P083",
+    "original": "轨道交通一体化智能锂电电源系统",
+    "context": "我司主导产品——【轨道交通一体化智能锂电电源系统】在 2023-202",
+    "max_len_hint": 15,
+    "link_key": "轨道交通一体化智能锂电电源系统"
+  },
+  {
+    "field_id": 34,
+    "loc": "P083",
+    "original": "2291.22万元、3514.73万元、7551.03万元",
+    "context": "-2025 年销售额分别为【2291.22万元、3514.73万元、7551.03万元】。",
+    "max_len_hint": 29,
+    "link_key": "2291.22万元、3514.73万元、7551.03万元"
+  },
+  {
+    "field_id": 35,
+    "loc": "P085",
+    "original": "2023 年：（2291.22/40100）*100%≈5.71%",
+    "context": "【2023 年：（2291.22/40100）*100%≈5.71%】",
+    "max_len_hint": 33,
+    "link_key": "2023 年：（2291.22/40100）*100%≈5.71%"
+  },
+  {
+    "field_id": 36,
+    "loc": "P086",
+    "original": "2024 年：（3514.73/43500）*100%≈8.08%",
+    "context": "【2024 年：（3514.73/43500）*100%≈8.08%】",
+    "max_len_hint": 33,
+    "link_key": "2024 年：（3514.73/43500）*100%≈8.08%"
+  },
+  {
+    "field_id": 37,
+    "loc": "P087",
+    "original": "2025 年：（7551.03/47200）*100%≈16.00%",
+    "context": "【2025 年：（7551.03/47200）*100%≈16.00%】",
+    "max_len_hint": 34,
+    "link_key": "2025 年：（7551.03/47200）*100%≈16.00%"
+  },
+  {
+    "field_id": 38,
+    "loc": "P089",
+    "original": "北京鼎汉技术集团股份有限公司、杭州高特电子设备股份有限公司、杭州华塑科技股份有限公司、杭州协能科技股份有限公司",
+    "context": "公司主要竞争对手分别是【北京鼎汉技术集团股份有限公司、杭州高特电子设备股份有限公司、杭州华塑科技股份有限公司、杭州协能科技股份有限公司】。根据市场调研及细分市场比例测",
+    "max_len_hint": 55,
+    "link_key": "北京鼎汉技术集团股份有限公司、杭州高特电子设备股份有限公司、杭州华塑科技股份有限公司、杭州协能科技股份有限公司"
+  },
+  {
+    "field_id": 39,
+    "loc": "P089",
+    "original": "浙江达航数据技术有限公司",
+    "context": "-2025 年【浙江达航数据技术有限公司】的产品市场规模占有率如图表4",
+    "max_len_hint": 12,
+    "link_key": "浙江达航数据技术有限公司"
+  },
+  {
+    "field_id": 40,
+    "loc": "P105",
+    "original": "浙江达航数据技术有限公司",
+    "context": "【浙江达航数据技术有限公司】",
+    "max_len_hint": 12,
+    "link_key": "浙江达航数据技术有限公司"
+  },
+  {
+    "field_id": 41,
+    "loc": "P106",
+    "original": "2291.22",
+    "context": "【2291.22】",
+    "max_len_hint": 7,
+    "link_key": "2291.22"
+  },
+  {
+    "field_id": 42,
+    "loc": "P107",
+    "original": "5.71%",
+    "context": "【5.71%】",
+    "max_len_hint": 5,
+    "link_key": "5.71%"
+  },
+  {
+    "field_id": 43,
+    "loc": "P108",
+    "original": "3514.73",
+    "context": "【3514.73】",
+    "max_len_hint": 7,
+    "link_key": "3514.73"
+  },
+  {
+    "field_id": 44,
+    "loc": "P109",
+    "original": "8.08%",
+    "context": "【8.08%】",
+    "max_len_hint": 5,
+    "link_key": "8.08%"
+  },
+  {
+    "field_id": 45,
+    "loc": "P110",
+    "original": "7551.03",
+    "context": "【7551.03】",
+    "max_len_hint": 7,
+    "link_key": "7551.03"
+  },
+  {
+    "field_id": 46,
+    "loc": "P111",
+    "original": "16.00%",
+    "context": "【16.00%】",
+    "max_len_hint": 6,
+    "link_key": "16.00%"
+  },
+  {
+    "field_id": 47,
+    "loc": "P112",
+    "original": "北京鼎汉技术集团股份有限公司",
+    "context": "【北京鼎汉技术集团股份有限公司】",
+    "max_len_hint": 14,
+    "link_key": "北京鼎汉技术集团股份有限公司"
+  },
+  {
+    "field_id": 48,
+    "loc": "P113",
+    "original": "5798.20",
+    "context": "【5798.20】",
+    "max_len_hint": 7,
+    "link_key": "5798.20"
+  },
+  {
+    "field_id": 49,
+    "loc": "P114",
+    "original": "14.46%",
+    "context": "【14.46%】",
+    "max_len_hint": 6,
+    "link_key": "14.46%"
+  },
+  {
+    "field_id": 50,
+    "loc": "P115",
+    "original": "6398.23",
+    "context": "【6398.23】",
+    "max_len_hint": 7,
+    "link_key": "6398.23"
+  },
+  {
+    "field_id": 51,
+    "loc": "P116",
+    "original": "14.71%",
+    "context": "【14.71%】",
+    "max_len_hint": 6,
+    "link_key": "14.71%"
+  },
+  {
+    "field_id": 52,
+    "loc": "P117",
+    "original": "6978.65",
+    "context": "【6978.65】",
+    "max_len_hint": 7,
+    "link_key": "6978.65"
+  },
+  {
+    "field_id": 53,
+    "loc": "P118",
+    "original": "14.79%",
+    "context": "【14.79%】",
+    "max_len_hint": 6,
+    "link_key": "14.79%"
+  },
+  {
+    "field_id": 54,
+    "loc": "P119",
+    "original": "杭州高特电子设备股份有限公司",
+    "context": "【杭州高特电子设备股份有限公司】",
+    "max_len_hint": 14,
+    "link_key": "杭州高特电子设备股份有限公司"
+  },
+  {
+    "field_id": 55,
+    "loc": "P120",
+    "original": "4433.22",
+    "context": "【4433.22】",
+    "max_len_hint": 7,
+    "link_key": "4433.22"
+  },
+  {
+    "field_id": 56,
+    "loc": "P121",
+    "original": "11.06%",
+    "context": "【11.06%】",
+    "max_len_hint": 6,
+    "link_key": "11.06%"
+  },
+  {
+    "field_id": 57,
+    "loc": "P122",
+    "original": "3944.70",
+    "context": "【3944.70】",
+    "max_len_hint": 7,
+    "link_key": "3944.70"
+  },
+  {
+    "field_id": 58,
+    "loc": "P123",
+    "original": "9.07%",
+    "context": "【9.07%】",
+    "max_len_hint": 5,
+    "link_key": "9.07%"
+  },
+  {
+    "field_id": 59,
+    "loc": "P124",
+    "original": "4244.32",
+    "context": "【4244.32】",
+    "max_len_hint": 7,
+    "link_key": "4244.32"
+  },
+  {
+    "field_id": 60,
+    "loc": "P125",
+    "original": "8.99%",
+    "context": "【8.99%】",
+    "max_len_hint": 5,
+    "link_key": "8.99%"
+  },
+  {
+    "field_id": 61,
+    "loc": "P126",
+    "original": "杭州华塑科技股份有限公司",
+    "context": "【杭州华塑科技股份有限公司】",
+    "max_len_hint": 12,
+    "link_key": "杭州华塑科技股份有限公司"
+  },
+  {
+    "field_id": 62,
+    "loc": "P127",
+    "original": "2098.00",
+    "context": "【2098.00】",
+    "max_len_hint": 7,
+    "link_key": "2098.00"
+  },
+  {
+    "field_id": 63,
+    "loc": "P128",
+    "original": "5.23%",
+    "context": "【5.23%】",
+    "max_len_hint": 5,
+    "link_key": "5.23%"
+  },
+  {
+    "field_id": 64,
+    "loc": "P129",
+    "original": "2387.43",
+    "context": "【2387.43】",
+    "max_len_hint": 7,
+    "link_key": "2387.43"
+  },
+  {
+    "field_id": 65,
+    "loc": "P130",
+    "original": "5.49%",
+    "context": "【5.49%】",
+    "max_len_hint": 5,
+    "link_key": "5.49%"
+  },
+  {
+    "field_id": 66,
+    "loc": "P131",
+    "original": "2278.55",
+    "context": "【2278.55】",
+    "max_len_hint": 7,
+    "link_key": "2278.55"
+  },
+  {
+    "field_id": 67,
+    "loc": "P132",
+    "original": "4.83%",
+    "context": "【4.83%】",
+    "max_len_hint": 5,
+    "link_key": "4.83%"
+  },
+  {
+    "field_id": 68,
+    "loc": "P133",
+    "original": "杭州协能科技股份有限公司",
+    "context": "【杭州协能科技股份有限公司】",
+    "max_len_hint": 12,
+    "link_key": "杭州协能科技股份有限公司"
+  },
+  {
+    "field_id": 69,
+    "loc": "P134",
+    "original": "986.57",
+    "context": "【986.57】",
+    "max_len_hint": 6,
+    "link_key": "986.57"
+  },
+  {
+    "field_id": 70,
+    "loc": "P135",
+    "original": "2.46%",
+    "context": "【2.46%】",
+    "max_len_hint": 5,
+    "link_key": "2.46%"
+  },
+  {
+    "field_id": 71,
+    "loc": "P136",
+    "original": "1029.32",
+    "context": "【1029.32】",
+    "max_len_hint": 7,
+    "link_key": "1029.32"
+  },
+  {
+    "field_id": 72,
+    "loc": "P137",
+    "original": "2.37%",
+    "context": "【2.37%】",
+    "max_len_hint": 5,
+    "link_key": "2.37%"
+  },
+  {
+    "field_id": 73,
+    "loc": "P138",
+    "original": "1232.34",
+    "context": "【1232.34】",
+    "max_len_hint": 7,
+    "link_key": "1232.34"
+  },
+  {
+    "field_id": 74,
+    "loc": "P139",
+    "original": "2.61%",
+    "context": "【2.61%】",
+    "max_len_hint": 5,
+    "link_key": "2.61%"
+  },
+  {
+    "field_id": 75,
+    "loc": "P141",
+    "original": "浙江达航数据技术有限公司",
+    "context": "4：2023-2025 年【浙江达航数据技术有限公司】占有率情况",
+    "max_len_hint": 12,
+    "link_key": "浙江达航数据技术有限公司"
+  },
+  {
+    "field_id": 76,
+    "loc": "P143",
+    "original": "轨道交通一体化智能锂电电源系统",
+    "context": "【轨道交通一体化智能锂电电源系统】",
+    "max_len_hint": 15,
+    "link_key": "轨道交通一体化智能锂电电源系统"
+  },
+  {
+    "field_id": 77,
+    "loc": "P149",
+    "original": "5.71%",
+    "context": "【5.71%】",
+    "max_len_hint": 5,
+    "link_key": "5.71%"
+  },
+  {
+    "field_id": 78,
+    "loc": "P150",
+    "original": "（第三名）",
+    "context": "【（第三名）】",
+    "max_len_hint": 5,
+    "link_key": "（第三名）"
+  },
+  {
+    "field_id": 79,
+    "loc": "P151",
+    "original": "8.08%",
+    "context": "【8.08%】",
+    "max_len_hint": 5,
+    "link_key": "8.08%"
+  },
+  {
+    "field_id": 80,
+    "loc": "P152",
+    "original": "（第三名）",
+    "context": "【（第三名）】",
+    "max_len_hint": 5,
+    "link_key": "（第三名）"
+  },
+  {
+    "field_id": 81,
+    "loc": "P153",
+    "original": "16.00%",
+    "context": "【16.00%】",
+    "max_len_hint": 6,
+    "link_key": "16.00%"
+  },
+  {
+    "field_id": 82,
+    "loc": "P154",
+    "original": "（第一名）",
+    "context": "【（第一名）】",
+    "max_len_hint": 5,
+    "link_key": "（第一名）"
+  }
+]
