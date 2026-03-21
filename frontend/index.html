@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>报告自动化助手</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+XiaoWei&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f2f6f3;
+      --paper: #ffffff;
+      --ink: #113229;
+      --muted: #5f7b72;
+      --line: #d5e3dd;
+      --brand: #0f7e64;
+      --brand-soft: #e6f4ef;
+      --accent: #d4663f;
+      --warn: #9c6a1f;
+      --warn-bg: #fff7ea;
+      --ok: #0c6e57;
+      --error: #b44747;
+      --radius: 14px;
+      --shadow: 0 10px 28px rgba(12, 46, 37, 0.08);
+      --display-font: "ZCOOL XiaoWei", serif;
+      --body-font: "Noto Sans SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--body-font);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 10%, #dcf2e9 0, transparent 28%),
+        radial-gradient(circle at 92% 18%, #fdebdc 0, transparent 24%),
+        var(--bg);
+    }
+
+    .site {
+      width: min(1240px, calc(100% - 32px));
+      margin: 18px auto 28px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      background: linear-gradient(115deg, #0f3f33 0%, #14634f 52%, #1a7b61 100%);
+      color: #f7fffc;
+      border-radius: 20px;
+      padding: 18px 20px;
+      box-shadow: var(--shadow);
+      animation: enter 420ms ease-out;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: var(--display-font);
+      font-weight: 400;
+      font-size: 34px;
+      letter-spacing: 1px;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      font-size: 13px;
+      color: #d6f5ec;
+    }
+
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .layout {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 14px;
+    }
+
+    .guide {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      box-shadow: 0 4px 16px rgba(17, 50, 41, 0.05);
+      height: fit-content;
+      position: sticky;
+      top: 12px;
+    }
+
+    .guide h2 {
+      margin: 0 0 12px;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .compass {
+      background: linear-gradient(145deg, #edf8f3, #f9fdfb);
+      border: 1px solid #d7e8e1;
+      border-radius: 12px;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+
+    .compass-label {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: #3c5f53;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: #d9e9e3;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, #128063, #15a17d);
+      transition: width 240ms ease;
+    }
+
+    .step-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .step-item {
+      border: 1px solid #d8e5df;
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    .step-item strong {
+      display: block;
+      margin-bottom: 2px;
+      color: #24483d;
+    }
+
+    .step-item small {
+      color: var(--muted);
+    }
+
+    .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: 0 4px 16px rgba(17, 50, 41, 0.05);
+      margin-bottom: 12px;
+      animation: enter 360ms ease-out;
+    }
+
+    .panel h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .badge.must { color: #1f5948; background: #ecf7f2; border-color: #cfe8df; }
+    .badge.opt { color: #6a5c2e; background: #fef9ea; border-color: #f0e0b6; }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      width: 100%;
+      padding: 10px 11px;
+      border: 1px solid #c8d8d1;
+      border-radius: 10px;
+      font-size: 14px;
+      color: var(--ink);
+      background: #fff;
+      outline: none;
+      transition: border-color 130ms ease, box-shadow 130ms ease;
+    }
+
+    .field input:focus,
+    .field select:focus,
+    .field textarea:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(15, 126, 100, 0.13);
+    }
+
+    .field textarea { min-height: 108px; resize: vertical; }
+
+    .mini-hint {
+      margin-top: 4px;
+      font-size: 11px;
+      color: #6f867e;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #d8e5df;
+      border-radius: 10px;
+      overflow: hidden;
+      font-size: 13px;
+    }
+
+    th, td {
+      border-bottom: 1px solid #e7f0ec;
+      padding: 8px;
+      text-align: center;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    th {
+      background: #f2faf7;
+      color: #335b4d;
+      font-weight: 700;
+    }
+
+    td input {
+      width: 100%;
+      min-width: 80px;
+      border: 1px solid #cfddd7;
+      border-radius: 8px;
+      padding: 7px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--ink);
+    }
+
+    td input[readonly] {
+      background: #f3f8f6;
+      color: #607a71;
+      cursor: not-allowed;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: transform 120ms ease, filter 120ms ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+
+    .btn.primary { background: var(--brand); color: #fff; font-weight: 700; }
+    .btn.subtle { background: #edf5f1; color: #23493d; border: 1px solid #d2e0da; }
+    .btn.accent { background: var(--accent); color: #fff; font-weight: 700; }
+
+    details.optional-box {
+      border: 1px dashed #ccdcd5;
+      border-radius: 12px;
+      background: #fafdfb;
+      padding: 10px;
+    }
+
+    details.optional-box summary {
+      cursor: pointer;
+      list-style: none;
+      font-weight: 700;
+      color: #2e5549;
+    }
+
+    details.optional-box summary::-webkit-details-marker { display: none; }
+
+    .source-card {
+      border: 1px solid #d7e5df;
+      border-left: 4px solid var(--brand);
+      border-radius: 10px;
+      padding: 10px;
+      margin-top: 8px;
+      background: #fff;
+      position: relative;
+    }
+
+    .source-del {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 24px;
+      height: 24px;
+      border: 0;
+      border-radius: 8px;
+      background: #fff0eb;
+      color: #b64a2d;
+      cursor: pointer;
+    }
+
+    .inference-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 10px 0;
+    }
+
+    .metric {
+      border: 1px solid #d8e5df;
+      border-radius: 10px;
+      padding: 10px;
+      background: #fbfefd;
+    }
+
+    .metric .k {
+      font-size: 12px;
+      color: #648076;
+    }
+
+    .metric .v {
+      margin-top: 4px;
+      font-size: 16px;
+      font-weight: 700;
+      color: #1f4639;
+    }
+
+    .status-board {
+      border: 1px solid #d9e5e0;
+      background: #f8fcfa;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 13px;
+      color: #365d50;
+    }
+
+    .log-wrap {
+      margin-top: 10px;
+      max-height: 210px;
+      overflow: auto;
+      border: 1px solid #d9e5e0;
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .log-wrap table { border: 0; }
+
+    .dock {
+      position: sticky;
+      bottom: 10px;
+      z-index: 5;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(6px);
+      border: 1px solid #d7e4df;
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .dock-status {
+      font-size: 13px;
+      color: #355c4f;
+      min-height: 18px;
+    }
+
+    .dock-status strong { color: var(--ok); }
+    .dock-status.error strong { color: var(--error); }
+
+    .warn-box {
+      border: 1px solid #f0debc;
+      background: var(--warn-bg);
+      color: var(--warn);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+
+    .empty {
+      color: #6c827a;
+      font-size: 12px;
+      padding: 8px;
+    }
+
+    @keyframes enter {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 1060px) {
+      .layout { grid-template-columns: 1fr; }
+      .guide { position: static; }
+      .inference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 720px) {
+      .topbar { flex-direction: column; align-items: flex-start; }
+      .top-actions { width: 100%; justify-content: flex-start; }
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      .inference-grid { grid-template-columns: 1fr; }
+      .dock { flex-direction: column; align-items: stretch; }
+      .dock .buttons { width: 100%; }
+      .dock .btn { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="site">
+    <header class="topbar">
+      <div class="brand">
+        <h1>报告自动化助手</h1>
+        <p>先完成推理自动化，再一键生成模板 Word。已有模板自动化流程保持不变。</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn subtle" type="button" onclick="saveDraft()">保存草稿</button>
+        <button class="btn subtle" type="button" onclick="loadDraft()">恢复草稿</button>
+        <button class="btn subtle" type="button" onclick="clearDraft()">清空草稿</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="guide">
+        <h2>操作导航</h2>
+        <div class="compass">
+          <div class="compass-label"><span>完成度</span><span id="progressText">0%</span></div>
+          <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+        </div>
+        <div class="step-list">
+          <div class="step-item"><strong>1. 基础资料</strong><small>企业、产品、日期与简介</small></div>
+          <div class="step-item"><strong>2. 经营数据</strong><small>三年销售额和市场规模</small></div>
+          <div class="step-item"><strong>3. 自动推理</strong><small>系统回填规模并给出证据分</small></div>
+          <div class="step-item"><strong>4. 生成文档</strong><small>输出最终 Word</small></div>
+        </div>
+      </aside>
+
+      <main>
+        <section class="panel" id="step1">
+          <div class="panel-head">
+            <h3>基础资料</h3>
+            <span class="badge must">必填</span>
+          </div>
+          <div class="grid-2">
+            <div class="field"><label>省份</label><input id="province" /></div>
+            <div class="field"><label>企业名称</label><input id="company_name" /></div>
+            <div class="field"><label>主导产品名称</label><input id="product_name" /></div>
+            <div class="field"><label>产品代码</label><input id="product_code" /></div>
+          </div>
+
+          <div class="grid-3" style="margin-top:10px;">
+            <div class="field"><label>年</label><select id="year"></select></div>
+            <div class="field"><label>月</label><select id="month"></select></div>
+            <div class="field"><label>日</label><select id="day"></select></div>
+          </div>
+
+          <div class="grid-2" style="margin-top:10px;">
+            <div class="field">
+              <label>产品类别（推理使用）</label>
+              <input id="product_category" placeholder="例如：可调式舌口全自动纸袋机" />
+            </div>
+            <div class="field">
+              <label>市场范围（推理使用）</label>
+              <select id="target_scope">
+                <option value="CN">中国市场</option>
+                <option value="GLOBAL">全球市场</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:10px;">
+            <label>企业介绍 / 产品介绍</label>
+            <textarea id="intro"></textarea>
+            <div class="mini-hint">这段文字同时用于推理和报告正文。</div>
+          </div>
+        </section>
+
+        <section class="panel" id="step2">
+          <div class="panel-head">
+            <h3>经营数据</h3>
+            <span class="badge must">必填</span>
+          </div>
+          <div class="warn-box">市场占有率会按“销售额 / 市场规模”自动计算。你也可以先点“自动推理市场规模”让系统回填。</div>
+          <table>
+            <thead>
+              <tr>
+                <th>年份</th>
+                <th>销售额 (万元)</th>
+                <th>市场规模 (万元)</th>
+                <th>占有率 (自动算)</th>
+                <th>排名（可选）</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>2023</td>
+                <td><input id="sale_23" oninput="calcMyPct('23')" /></td>
+                <td><input id="total_mkt_23" oninput="calcMyPct('23')" /></td>
+                <td><input id="pct_23" readonly /></td>
+                <td><input id="rank_23" /></td>
+              </tr>
+              <tr>
+                <td>2024</td>
+                <td><input id="sale_24" oninput="calcMyPct('24')" /></td>
+                <td><input id="total_mkt_24" oninput="calcMyPct('24')" /></td>
+                <td><input id="pct_24" readonly /></td>
+                <td><input id="rank_24" /></td>
+              </tr>
+              <tr>
+                <td>2025</td>
+                <td><input id="sale_25" oninput="calcMyPct('25')" /></td>
+                <td><input id="total_mkt_25" oninput="calcMyPct('25')" /></td>
+                <td><input id="pct_25" readonly /></td>
+                <td><input id="rank_25" /></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="buttons">
+            <button class="btn subtle" type="button" onclick="runInference()">自动推理市场规模</button>
+            <button class="btn subtle" type="button" onclick="applyLatestShareToAll()">按 2025 占有率回填三年规模</button>
+          </div>
+        </section>
+
+        <section class="panel" id="step3">
+          <div class="panel-head">
+            <h3>推理结果看板</h3>
+            <span class="badge opt">系统自动</span>
+          </div>
+
+          <div class="inference-grid">
+            <div class="metric"><div class="k">任务状态</div><div class="v" id="infStatus">未执行</div></div>
+            <div class="metric"><div class="k">证据分</div><div class="v" id="infScore">-</div></div>
+            <div class="metric"><div class="k">最近财年市占率</div><div class="v" id="infShare">-</div></div>
+            <div class="metric"><div class="k">路径层级</div><div class="v" id="infDepth">-</div></div>
+          </div>
+
+          <div class="status-board" id="infPath">细分路径：尚未生成</div>
+
+          <div class="log-wrap" style="margin-top:10px;">
+            <table>
+              <thead><tr><th>轮次</th><th>渠道</th><th>动作</th><th>说明</th></tr></thead>
+              <tbody id="attemptBody"><tr><td colspan="4" class="empty">暂无执行日志</td></tr></tbody>
+            </table>
+          </div>
+
+          <div class="log-wrap" style="margin-top:10px;">
+            <table>
+              <thead><tr><th>来源标题</th><th>链接</th><th>摘要</th></tr></thead>
+              <tbody id="evidenceBody"><tr><td colspan="3" class="empty">暂无证据条目</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" id="step4">
+          <div class="panel-head">
+            <h3>文档输出补充项</h3>
+            <span class="badge opt">选填</span>
+          </div>
+
+          <details class="optional-box">
+            <summary>展开填写竞争对手与数据来源（不填也可先生成）</summary>
+            <div class="grid-2" style="margin-top:10px;">
+              <div>
+                <label style="font-size:12px;color:var(--muted);">竞争对手</label>
+                <table id="comp_table" style="margin-top:6px;">
+                  <thead><tr><th>对手名称</th><th>2023占有率</th><th>2024占有率</th><th>2025占有率</th></tr></thead>
+                  <tbody>
+                    <tr><td><input class="c-name"></td><td><input class="c-p23"></td><td><input class="c-p24"></td><td><input class="c-p25"></td></tr>
+                    <tr><td><input class="c-name"></td><td><input class="c-p23"></td><td><input class="c-p24"></td><td><input class="c-p25"></td></tr>
+                    <tr><td><input class="c-name"></td><td><input class="c-p23"></td><td><input class="c-p24"></td><td><input class="c-p25"></td></tr>
+                    <tr><td><input class="c-name"></td><td><input class="c-p23"></td><td><input class="c-p24"></td><td><input class="c-p25"></td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div>
+                <label style="font-size:12px;color:var(--muted);">报告思路与数据来源</label>
+                <div class="buttons" style="margin-top:6px;">
+                  <button class="btn subtle" type="button" onclick="addSource()">新增来源</button>
+                </div>
+                <div id="sources_list"></div>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <section class="dock">
+          <div id="status" class="dock-status">状态：等待操作</div>
+          <div class="buttons" style="margin:0;">
+            <button class="btn accent" type="button" onclick="generate()">生成最终 Word</button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const DRAFT_KEY = "report_automation_draft_v3";
+    let sourceCount = 0;
+
+    function setStatus(text, mode) {
+      const el = document.getElementById("status");
+      el.className = "dock-status";
+      if (mode === "error") el.classList.add("error");
+      el.innerHTML = "状态：<strong>" + text + "</strong>";
+    }
+
+    function safeNum(v) {
+      const n = parseFloat(String(v || "").replace(/,/g, "").trim());
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function pctNum(v) {
+      const t = String(v || "").replace("%", "").trim();
+      const n = parseFloat(t);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function initDates() {
+      const y = document.getElementById("year");
+      const m = document.getElementById("month");
+      const d = document.getElementById("day");
+      const now = new Date();
+
+      for (let i = 2020; i <= 2035; i++) y.add(new Option(i, i));
+      for (let i = 1; i <= 12; i++) m.add(new Option(i, i));
+      for (let i = 1; i <= 31; i++) d.add(new Option(i, i));
+
+      y.value = String(now.getFullYear());
+      m.value = String(now.getMonth() + 1);
+      d.value = String(now.getDate());
+    }
+
+    function calcMyPct(year) {
+      const sale = safeNum(document.getElementById("sale_" + year).value);
+      const mkt = safeNum(document.getElementById("total_mkt_" + year).value);
+      const pctEl = document.getElementById("pct_" + year);
+
+      if (sale !== null && mkt !== null && mkt > 0) {
+        pctEl.value = ((sale / mkt) * 100).toFixed(2) + "%";
+      } else {
+        pctEl.value = "";
+      }
+      updateProgress();
+    }
+
+    function updateProgress() {
+      const required = [
+        "province", "company_name", "product_name", "product_code", "intro", "sale_23", "sale_24", "sale_25"
+      ];
+      let filled = 0;
+      required.forEach((id) => {
+        const val = (document.getElementById(id).value || "").trim();
+        if (val) filled += 1;
+      });
+      const percent = Math.round((filled / required.length) * 100);
+      document.getElementById("progressBar").style.width = percent + "%";
+      document.getElementById("progressText").textContent = percent + "%";
+    }
+
+    function addSource(prefill) {
+      sourceCount += 1;
+      const card = document.createElement("div");
+      card.className = "source-card";
+      card.innerHTML = `
+        <button class="source-del" type="button" onclick="this.parentElement.remove();saveDraft();">×</button>
+        <div style="font-size:12px;color:#4e6f64;margin-bottom:6px;">来源 ${sourceCount}</div>
+        <div class="field"><label>来源名称</label><input class="s-name" /></div>
+        <div class="field"><label>来源网址</label><input class="s-url" /></div>
+        <div class="field"><label>图表标题</label><input class="s-chart" /></div>
+        <div class="field"><label>分析结论</label><textarea class="s-text" style="min-height:85px;"></textarea></div>
+      `;
+
+      document.getElementById("sources_list").appendChild(card);
+
+      if (prefill) {
+        card.querySelector(".s-name").value = prefill.name || "";
+        card.querySelector(".s-url").value = prefill.url || "";
+        card.querySelector(".s-chart").value = prefill.chart_title || "";
+        card.querySelector(".s-text").value = prefill.analysis || "";
+      }
+    }
+
+    function collectCompetitors() {
+      const rows = [];
+      document.querySelectorAll("#comp_table tbody tr").forEach((tr) => {
+        rows.push({
+          name: tr.querySelector(".c-name").value,
+          p23: tr.querySelector(".c-p23").value,
+          p24: tr.querySelector(".c-p24").value,
+          p25: tr.querySelector(".c-p25").value,
+        });
+      });
+      return rows;
+    }
+
+    function collectCompetitorNames() {
+      return collectCompetitors().map((x) => (x.name || "").trim()).filter(Boolean);
+    }
+
+    function collectSources() {
+      const list = [];
+      document.querySelectorAll(".source-card").forEach((card) => {
+        const block = {
+          name: card.querySelector(".s-name").value,
+          url: card.querySelector(".s-url").value,
+          chart_title: card.querySelector(".s-chart").value,
+          analysis: card.querySelector(".s-text").value,
+        };
+        if (block.name || block.url || block.chart_title || block.analysis) list.push(block);
+      });
+
+      if (list.length === 0) {
+        list.push({
+          name: "系统默认来源",
+          url: "",
+          chart_title: "图表1 市场规模",
+          analysis: "本段为占位内容，建议在 Word 成稿中补充最终来源和分析。",
+        });
+      }
+      return list;
+    }
+
+    function applyLatestShareToAll() {
+      const p = pctNum(document.getElementById("pct_25").value);
+      if (p === null || p <= 0) {
+        setStatus("2025 占有率为空，无法回填", "error");
+        return;
+      }
+      const share = p / 100;
+      ["23", "24", "25"].forEach((yy) => {
+        const sale = safeNum(document.getElementById("sale_" + yy).value);
+        if (sale !== null && sale > 0) {
+          document.getElementById("total_mkt_" + yy).value = (sale / share).toFixed(2);
+          calcMyPct(yy);
+        }
+      });
+      setStatus("已按 2025 占有率回填三年市场规模");
+    }
+
+    function renderAttemptLog(attempts) {
+      const body = document.getElementById("attemptBody");
+      if (!Array.isArray(attempts) || attempts.length === 0) {
+        body.innerHTML = '<tr><td colspan="4" class="empty">暂无执行日志</td></tr>';
+        return;
+      }
+      body.innerHTML = attempts.slice(-12).map((a) => `
+        <tr>
+          <td>${a.round_index ?? "-"}</td>
+          <td>${a.provider ?? "-"}</td>
+          <td>${a.action ?? "-"}</td>
+          <td style="text-align:left;">${(a.reason || "").slice(0, 80)}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderEvidenceLog(evidence) {
+      const body = document.getElementById("evidenceBody");
+      if (!Array.isArray(evidence) || evidence.length === 0) {
+        body.innerHTML = '<tr><td colspan="3" class="empty">暂无证据条目</td></tr>';
+        return;
+      }
+      body.innerHTML = evidence.slice(0, 10).map((e) => `
+        <tr>
+          <td style="text-align:left;">${(e.title || "-").slice(0, 40)}</td>
+          <td style="text-align:left;"><a href="${e.url || '#'}" target="_blank" rel="noopener">${(e.url || "-").slice(0, 35)}</a></td>
+          <td style="text-align:left;">${(e.snippet || "-").slice(0, 70)}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderInferenceResult(data) {
+      const status = data.status || "-";
+      const scorePct = Number(data.evidence_score || 0) * 100;
+      const sharePct = data.market_share_latest_year != null ? (Number(data.market_share_latest_year) * 100).toFixed(2) + "%" : "-";
+      const path = Array.isArray(data.final_market_path) ? data.final_market_path : [];
+
+      document.getElementById("infStatus").textContent = status;
+      document.getElementById("infScore").textContent = scorePct ? scorePct.toFixed(0) + " 分" : "-";
+      document.getElementById("infShare").textContent = sharePct;
+      document.getElementById("infDepth").textContent = path.length ? String(path.length) + " 层" : "-";
+      document.getElementById("infPath").textContent = "细分路径：" + (path.length ? path.join(" → ") : "未生成");
+
+      renderAttemptLog(data.attempt_log || []);
+      renderEvidenceLog(data.evidence_chain || []);
+    }
+
+    function mapEvidenceToSources(evidenceList) {
+      if (!Array.isArray(evidenceList) || evidenceList.length === 0) return;
+      const holder = document.getElementById("sources_list");
+      holder.innerHTML = "";
+      sourceCount = 0;
+      evidenceList.slice(0, 3).forEach((e, idx) => {
+        addSource({
+          name: e.title || `自动来源${idx + 1}`,
+          url: e.url || "",
+          chart_title: `图表${idx + 1} 市场规模参考`,
+          analysis: e.snippet || "自动提取摘要",
+        });
+      });
+    }
+
+    async function runInference() {
+      const company = document.getElementById("company_name").value.trim();
+      const product = document.getElementById("product_name").value.trim();
+      if (!company || !product) {
+        setStatus("请先填写企业名称和主导产品", "error");
+        return;
+      }
+
+      const payload = {
+        company_name: company,
+        product_name: product,
+        product_intro: document.getElementById("intro").value,
+        product_category: document.getElementById("product_category").value,
+        company_intro: document.getElementById("intro").value,
+        competitors: collectCompetitorNames(),
+        sale_23: document.getElementById("sale_23").value,
+        sale_24: document.getElementById("sale_24").value,
+        sale_25: document.getElementById("sale_25").value,
+        target_scope: document.getElementById("target_scope").value,
+      };
+
+      setStatus("正在提交推理任务...");
+
+      try {
+        const submit = await fetch("/infer-market-share", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!submit.ok) {
+          setStatus("推理任务提交失败", "error");
+          return;
+        }
+
+        const submitData = await submit.json();
+        const taskId = submitData.task_id;
+        setStatus("推理任务已提交，正在执行...");
+
+        let finalData = null;
+        for (let i = 0; i < 70; i++) {
+          const q = await fetch(`/infer-market-share/${taskId}`);
+          if (!q.ok) {
+            setStatus("推理结果查询失败", "error");
+            return;
+          }
+          const data = await q.json();
+          if (["REACHED", "NOT_REACHED", "FAILED"].includes(data.status)) {
+            finalData = data;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+
+        if (!finalData) {
+          setStatus("推理超时，请稍后重试", "error");
+          return;
+        }
+
+        renderInferenceResult(finalData);
+
+        const share = Number(finalData.market_share_latest_year || 0);
+        if (share > 0) {
+          ["23", "24", "25"].forEach((yy) => {
+            const sale = safeNum(document.getElementById("sale_" + yy).value);
+            if (sale !== null && sale > 0) {
+              document.getElementById("total_mkt_" + yy).value = (sale / share).toFixed(2);
+              calcMyPct(yy);
+            }
+          });
+        }
+
+        mapEvidenceToSources(finalData.evidence_chain || []);
+        saveDraft();
+
+        if (finalData.status === "REACHED") {
+          setStatus("推理完成：已达到目标阈值");
+        } else if (finalData.status === "NOT_REACHED") {
+          setStatus("推理完成：未达标，已返回最优候选");
+        } else {
+          setStatus("推理执行失败，请检查输入后重试", "error");
+        }
+      } catch (_e) {
+        setStatus("推理请求异常，请稍后重试", "error");
+      }
+    }
+
+    async function generate() {
+      const company = document.getElementById("company_name").value.trim();
+      const product = document.getElementById("product_name").value.trim();
+      if (!company || !product) {
+        setStatus("请先填写企业名称和主导产品", "error");
+        return;
+      }
+
+      const data = {
+        province: document.getElementById("province").value,
+        company_name: company,
+        product_name: product,
+        product_code: document.getElementById("product_code").value,
+        year: document.getElementById("year").value,
+        month: document.getElementById("month").value,
+        day: document.getElementById("day").value,
+        intro: document.getElementById("intro").value,
+
+        sale_23: document.getElementById("sale_23").value,
+        total_mkt_23: document.getElementById("total_mkt_23").value,
+        pct_23: document.getElementById("pct_23").value,
+        rank_23: document.getElementById("rank_23").value,
+
+        sale_24: document.getElementById("sale_24").value,
+        total_mkt_24: document.getElementById("total_mkt_24").value,
+        pct_24: document.getElementById("pct_24").value,
+        rank_24: document.getElementById("rank_24").value,
+
+        sale_25: document.getElementById("sale_25").value,
+        total_mkt_25: document.getElementById("total_mkt_25").value,
+        pct_25: document.getElementById("pct_25").value,
+        rank_25: document.getElementById("rank_25").value,
+
+        sources: collectSources(),
+        competitors: collectCompetitors(),
+      };
+
+      setStatus("正在生成 Word...");
+      try {
+        const r = await fetch("/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+
+        if (!r.ok) {
+          const err = await r.json();
+          setStatus("Word 生成失败：" + (err.detail || "未知错误"), "error");
+          return;
+        }
+
+        const blob = await r.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "output.docx";
+        a.click();
+        saveDraft();
+        setStatus("Word 生成成功，已开始下载");
+      } catch (_e) {
+        setStatus("网络异常，Word 生成失败", "error");
+      }
+    }
+
+    function saveDraft() {
+      const snapshot = {
+        province: document.getElementById("province").value,
+        company_name: document.getElementById("company_name").value,
+        product_name: document.getElementById("product_name").value,
+        product_code: document.getElementById("product_code").value,
+        year: document.getElementById("year").value,
+        month: document.getElementById("month").value,
+        day: document.getElementById("day").value,
+        intro: document.getElementById("intro").value,
+        product_category: document.getElementById("product_category").value,
+        target_scope: document.getElementById("target_scope").value,
+
+        sale_23: document.getElementById("sale_23").value,
+        total_mkt_23: document.getElementById("total_mkt_23").value,
+        pct_23: document.getElementById("pct_23").value,
+        rank_23: document.getElementById("rank_23").value,
+
+        sale_24: document.getElementById("sale_24").value,
+        total_mkt_24: document.getElementById("total_mkt_24").value,
+        pct_24: document.getElementById("pct_24").value,
+        rank_24: document.getElementById("rank_24").value,
+
+        sale_25: document.getElementById("sale_25").value,
+        total_mkt_25: document.getElementById("total_mkt_25").value,
+        pct_25: document.getElementById("pct_25").value,
+        rank_25: document.getElementById("rank_25").value,
+
+        competitors: collectCompetitors(),
+        sources: collectSources(),
+      };
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(snapshot));
+      updateProgress();
+    }
+
+    function loadDraft() {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) {
+        setStatus("没有可恢复的草稿", "error");
+        return;
+      }
+      try {
+        const d = JSON.parse(raw);
+
+        [
+          "province", "company_name", "product_name", "product_code", "year", "month", "day", "intro",
+          "product_category", "target_scope",
+          "sale_23", "total_mkt_23", "pct_23", "rank_23",
+          "sale_24", "total_mkt_24", "pct_24", "rank_24",
+          "sale_25", "total_mkt_25", "pct_25", "rank_25",
+        ].forEach((k) => {
+          if (document.getElementById(k) && d[k] != null) document.getElementById(k).value = d[k];
+        });
+
+        const compRows = document.querySelectorAll("#comp_table tbody tr");
+        (d.competitors || []).slice(0, compRows.length).forEach((c, i) => {
+          const tr = compRows[i];
+          tr.querySelector(".c-name").value = c.name || "";
+          tr.querySelector(".c-p23").value = c.p23 || "";
+          tr.querySelector(".c-p24").value = c.p24 || "";
+          tr.querySelector(".c-p25").value = c.p25 || "";
+        });
+
+        const holder = document.getElementById("sources_list");
+        holder.innerHTML = "";
+        sourceCount = 0;
+        (d.sources || []).forEach((s) => addSource(s));
+        if (!d.sources || d.sources.length === 0) addSource();
+
+        ["23", "24", "25"].forEach(calcMyPct);
+        updateProgress();
+        setStatus("草稿恢复成功");
+      } catch (_e) {
+        setStatus("草稿格式异常，恢复失败", "error");
+      }
+    }
+
+    function clearDraft() {
+      localStorage.removeItem(DRAFT_KEY);
+      setStatus("草稿已清空");
+    }
+
+    function bindAutoSave() {
+      document.querySelectorAll("input, textarea, select").forEach((el) => {
+        el.addEventListener("change", () => {
+          saveDraft();
+          updateProgress();
+        });
+        el.addEventListener("input", () => {
+          updateProgress();
+        });
+      });
+    }
+
+    initDates();
+    addSource();
+    bindAutoSave();
+    updateProgress();
+    setStatus("页面已就绪，可开始录入");
+  </script>
+</body>
+</html>

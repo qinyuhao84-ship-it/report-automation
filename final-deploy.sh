@@ -1,0 +1,46 @@
+#!/bin/bash
+
+echo "🚀 最终部署脚本 - 报告生成系统"
+echo "======================================"
+echo ""
+echo "✅ 步骤 1/3: 代码已成功推送到 GitHub!"
+echo "   仓库: https://github.com/qinyuhao84-ship-it/report-automation"
+echo ""
+echo "🎯 步骤 2/3: 现在需要在 Render 上创建服务"
+echo ""
+echo "正在打开 Render 控制台..."
+echo ""
+echo "请按以下步骤操作："
+echo "1. 在打开的页面中，使用 GitHub 登录 Render"
+echo "2. 点击 'New +' → 'Web Service'"
+echo "3. 在 'Connect a repository' 部分："
+echo "   • 点击 'Connect account' 授权 GitHub"
+echo "   • 选择 'qinyuhao84-ship-it/report-automation' 仓库"
+echo "4. 配置服务："
+echo "   • Name: report-automation (自动填充)"
+echo "   • Region: Singapore (sin) ← 重要！国内访问快"
+echo "   • Branch: main"
+echo "   • Runtime: Python 3"
+echo "   • Build Command: pip install -r requirements.txt"
+echo "   • Start Command: uvicorn app:app --host 0.0.0.0 --port \$PORT"
+echo "   • Instance Type: Free"
+echo "5. 点击 'Create Web Service'"
+echo ""
+echo "⏳ 步骤 3/3: 等待构建完成（约 2-5 分钟）"
+echo ""
+echo "构建完成后，你将获得一个类似以下的链接："
+echo "   https://report-automation.onrender.com"
+echo ""
+echo "🎉 部署完成！将此链接分享给同事即可使用报告生成系统。"
+echo ""
+echo "🔧 如需帮助，请随时联系我。"
+
+# 尝试打开浏览器
+if command -v open &> /dev/null; then
+    open "https://dashboard.render.com"
+elif command -v xdg-open &> /dev/null; then
+    xdg-open "https://dashboard.render.com"
+else
+    echo ""
+    echo "请手动访问: https://dashboard.render.com"
+fi
