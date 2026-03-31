@@ -13,6 +13,7 @@ class TaskStatus(str, Enum):
     RUNNING = "RUNNING"
     REACHED = "REACHED"
     NOT_REACHED = "NOT_REACHED"
+    CANCELLED = "CANCELLED"
     FAILED = "FAILED"
 
 
@@ -91,22 +92,25 @@ def _normalize_market_scope(value):
 
 
 def _default_llm_api_base():
-    return _normalize_optional_text(os.getenv("OPENAI_API_BASE") or os.getenv("LLM_API_BASE"))
+    return _normalize_optional_text(
+        os.getenv("OPENAI_API_BASE") or os.getenv("LLM_API_BASE") or "https://api.deepseek.com/v1"
+    )
 
 
 def _default_llm_enabled():
     api_base = _default_llm_api_base()
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "sk-539bfb607ee749ceb4174358c5fb1ea9"
     return bool(api_base and api_key)
 
 
 def _default_llm_model():
-    return _normalize_optional_text(os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.1-codex")
+    return _normalize_optional_text(os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-reasoner")
 
 
 class InferenceInput(BaseModel):
     company_name: str = Field(..., min_length=1)
     product_name: str = Field(..., min_length=1)
+    product_code: str = ""
     product_intro: str = ""
     product_category: str = ""
     company_intro: str = ""
@@ -118,7 +122,7 @@ class InferenceInput(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, use_enum_values=False)
 
-    @validator("company_name", "product_name", "product_intro", "product_category", "company_intro", pre=True)
+    @validator("company_name", "product_name", "product_code", "product_intro", "product_category", "company_intro", pre=True)
     def _strip_text(cls, value):
         if value is None:
             return ""
@@ -218,7 +222,10 @@ class ProviderConfig(BaseModel):
 class InferenceConfig(BaseModel):
     market_scope_default: MarketScope = MarketScope.CN
     max_search_rounds: int = Field(default=10, ge=1, le=50)
+    max_runtime_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
     target_share_threshold: float = Field(default=0.10, ge=0.01, le=1.0)
+    market_fit_required: bool = True
+    market_fit_min_confidence: float = Field(default=0.60, ge=0.0, le=1.0)
     estimation_priority: List[EstimationMethod] = Field(
         default_factory=lambda: [
             EstimationMethod.SHARE_X_PARENT,
@@ -238,7 +245,7 @@ class InferenceConfig(BaseModel):
     cny_per_usd: float = Field(default=7.2, gt=0)
     llm_enabled: bool = Field(default_factory=_default_llm_enabled)
     llm_api_base: Optional[str] = Field(default_factory=_default_llm_api_base)
-    llm_api_key_env: str = Field(default="OPENAI_API_KEY")
+    llm_api_key_env: str = Field(default="sk-539bfb607ee749ceb4174358c5fb1ea9")
     llm_model: str = Field(default_factory=_default_llm_model)
     llm_planning_model: Optional[str] = None
     llm_extraction_model: Optional[str] = None
@@ -320,12 +327,23 @@ class EvidenceRecord(BaseModel):
     url: str
     snippet: str
     captured_at: datetime
+    search_page_url: Optional[str] = None
     extracted_year: Optional[int] = None
     extracted_market_size: Optional[float] = None
     extracted_ratio: Optional[float] = None
+    extracted_growth_rate: Optional[float] = None
     method: Optional[EstimationMethod] = None
     market_path: List[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    source_verified: bool = False
+    quote_text: Optional[str] = None
+    market_size_original_value: Optional[float] = None
+    market_size_original_unit: Optional[str] = None
+    market_size_original_currency: Optional[str] = None
+    usd_cny_rate_used: Optional[float] = None
+    conversion_formula: Optional[str] = None
+    llm_review_passed: bool = True
+    llm_review_reason: Optional[str] = None
 
     model_config = ConfigDict(use_enum_values=False)
 
@@ -362,6 +380,12 @@ class TaskResult(BaseModel):
     evidence_chain: List[EvidenceRecord] = Field(default_factory=list)
     attempt_log: List[AttemptRecord] = Field(default_factory=list)
     assumption_notes: List[str] = Field(default_factory=list)
+    market_fit_passed: bool = False
+    market_fit_reason: Optional[str] = None
+    market_fit_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    usd_cny_rate_used: Optional[float] = None
+    usd_cny_rate_source: Optional[str] = None
+    usd_cny_rate_realtime: bool = False
     error_message: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True, use_enum_values=False)
@@ -376,10 +400,20 @@ class CreateTaskResponse(BaseModel):
     status: TaskStatus
 
 
+class CancelTaskResponse(BaseModel):
+    task_id: str
+    status: TaskStatus
+    accepted: bool = False
+    message: str = ""
+
+
 class InferConfigPatch(BaseModel):
     market_scope_default: Optional[MarketScope] = None
     max_search_rounds: Optional[int] = Field(default=None, ge=1, le=50)
+    max_runtime_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
     target_share_threshold: Optional[float] = Field(default=None, ge=0.01, le=1.0)
+    market_fit_required: Optional[bool] = None
+    market_fit_min_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     estimation_priority: Optional[List[EstimationMethod]] = None
     provider_priority: Optional[List[ProviderName]] = None
     evidence_min_sources: Optional[int] = Field(default=None, ge=1, le=5)

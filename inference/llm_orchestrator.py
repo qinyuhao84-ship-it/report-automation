@@ -4,7 +4,7 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
@@ -51,6 +51,22 @@ def _normalize_optional_int(value: Any) -> Optional[int]:
         return int(float(str(value).strip()))
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_text_list(value: Any, limit: int = 6) -> List[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    items: List[str] = []
+    for item in value:
+        text = _normalize_text(item)
+        if not text:
+            continue
+        if text in items:
+            continue
+        items.append(text)
+        if len(items) >= limit:
+            break
+    return items
 
 
 def _strip_code_fences(text: str) -> str:
@@ -126,9 +142,17 @@ def _extract_text_from_response(payload: Dict[str, Any]) -> str:
 @dataclass(frozen=True)
 class LLMPlan:
     query: str
+    provider_queries: Dict[str, str]
     market_path: List[str]
     next_paths: List[List[str]]
     should_stop: bool
+    confidence: float
+    reason: str
+
+
+@dataclass(frozen=True)
+class LLMPathProposal:
+    market_paths: List[List[str]]
     confidence: float
     reason: str
 
@@ -151,6 +175,24 @@ class LLMExtraction:
     @property
     def extracted_ratio(self) -> Optional[float]:
         return self.ratio
+
+
+@dataclass(frozen=True)
+class LLMFitCheck:
+    is_aligned: bool
+    confidence: float
+    reason: str
+    matched_points: List[str] = field(default_factory=list)
+    conflict_points: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class LLMEvidenceReview:
+    is_target_market: bool
+    data_quality_passed: bool
+    confidence: float
+    reason: str
+    issues: List[str] = field(default_factory=list)
 
 
 class OpenAICompatibleClient:
@@ -215,6 +257,10 @@ def _default_api_base(config: InferenceConfig) -> Optional[str]:
 
 
 def _resolve_api_key(api_key_env: str) -> Optional[str]:
+    direct_value = (api_key_env or "").strip()
+    # 兼容“配置文件直接写 key”的模式（如 sk-xxxx），避免只能依赖环境变量名。
+    if direct_value.startswith("sk-"):
+        return direct_value
     for key_name in (api_key_env, "OPENAI_API_KEY", "LLM_API_KEY"):
         value = os.getenv(key_name)
         if value and value.strip():
@@ -304,9 +350,13 @@ class LLMOrchestrator:
             {
                 "role": "system",
                 "content": (
-                    "你是市场细分和搜索规划器。"
+                    "你是“细分市场检索策略规划器（Production）”。"
                     "只输出 JSON，不要输出解释。"
-                    "目标是帮助找到最细分且有公开数据来源的细分市场，并生成可搜索的查询词。"
+                    "项目总目标：基于企业与产品资料，在公开网络中找到主导产品所处细分市场规模，"
+                    "并支持市场占有率=销售额/市场规模的可解释计算。"
+                    "你必须优先规划“可检索、可取数、可核验原文”的路径，而不是追求理论完美。"
+                    "禁止编造事实；无法确认时必须降低置信度并在 reason 写明不确定性。"
+                    "规划原则：先保证可查到规模数据，再追求更细分；若过细导致无数据，给回退路径。"
                 ),
             },
             {
@@ -316,6 +366,7 @@ class LLMOrchestrator:
                         "task": "PLAN",
                         "company_name": input_model.company_name,
                         "product_name": input_model.product_name,
+                        "product_code": input_model.product_code,
                         "product_intro": input_model.product_intro,
                         "product_category": input_model.product_category,
                         "company_intro": input_model.company_intro,
@@ -325,8 +376,19 @@ class LLMOrchestrator:
                         "current_path": list(current_path),
                         "evidence_summary": list(evidence_summary),
                         "fallback_query": fallback_query,
+                        "hard_rules": [
+                            "优先面向“行业报告/协会统计/上市公司年报/研究机构”可检索的关键词组合",
+                            "优先最近年份（latest_sales_year）并保留单位币种、增长率相关关键词",
+                            "若当前路径证据弱，给出至少2条下一步可执行候选路径",
+                            "不要输出空泛路径节点（如“其他”“综合”）",
+                            "query 必须可直接投喂给秘塔/元宝进行全网检索",
+                        ],
                         "output_schema": {
                             "query": "string",
+                            "provider_queries": {
+                                "mitata": "string",
+                                "yuanbao": "string"
+                            },
                             "market_path": ["string"],
                             "next_paths": [["string"]],
                             "should_stop": "boolean",
@@ -348,6 +410,16 @@ class LLMOrchestrator:
             return None
 
         query = _normalize_text(payload.get("query")) or _normalize_text(fallback_query)
+        raw_provider_queries = payload.get("provider_queries")
+        provider_queries: Dict[str, str] = {}
+        if isinstance(raw_provider_queries, dict):
+            for key, value in raw_provider_queries.items():
+                name = _normalize_text(key).lower()
+                if name not in {"mitata", "yuanbao", "doubao"}:
+                    continue
+                text = _normalize_text(value)
+                if text:
+                    provider_queries[name] = text
         market_path = self._normalize_path(payload.get("market_path")) or list(current_path)
         next_paths = self._normalize_paths(payload.get("next_paths"))
         should_stop = bool(payload.get("should_stop", False))
@@ -356,11 +428,97 @@ class LLMOrchestrator:
 
         return LLMPlan(
             query=query,
+            provider_queries=provider_queries,
             market_path=market_path,
             next_paths=next_paths,
             should_stop=should_stop,
             confidence=confidence,
             reason=reason,
+        )
+
+    def propose_market_paths(
+        self,
+        *,
+        input_model: InferenceInput,
+        latest_year: int,
+        max_paths: int = 12,
+    ) -> Optional[LLMPathProposal]:
+        if not self.is_available():
+            return None
+
+        bounded_max_paths = max(3, min(int(max_paths or 12), 24))
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是“主导产品细分市场总规划器（Production）”。"
+                    "只输出 JSON，不要输出解释。"
+                    "项目目标：先穷举主导产品所有合理细分链，再让搜索器逐链检索市场规模证据。"
+                    "你必须尽可能覆盖多维度细分：产品形态/功能/技术路线/应用场景/客户行业/标准编码映射/区域。"
+                    "路径不要求学术完美，但必须业务上说得通、可检索、可落地。"
+                    "禁止编造市场规模数字；当前阶段仅做路径设计，不输出任何市场规模结论。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "task": "PATH_PROPOSAL",
+                        "company_name": input_model.company_name,
+                        "product_name": input_model.product_name,
+                        "product_code": input_model.product_code,
+                        "product_intro": input_model.product_intro,
+                        "product_category": input_model.product_category,
+                        "company_intro": input_model.company_intro,
+                        "market_scope": input_model.market_scope.value,
+                        "latest_sales_year": latest_year,
+                        "constraints": [
+                            "优先给出最可能拿到公开市场规模数据的路径",
+                            "每条路径至少 2 层，最多 6 层",
+                            "路径节点使用中文短语，避免空泛词",
+                            "若产品代码可用，必须将其映射为可检索的行业或产品分类线索",
+                            "路径之间要有差异化，避免同义重复",
+                            "至少覆盖“功能细分/技术细分/应用细分/客户群细分”四类中的三类",
+                            f"最多返回 {bounded_max_paths} 条",
+                        ],
+                        "output_schema": {
+                            "market_paths": [["string"]],
+                            "confidence": "number",
+                            "reason": "string",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+
+        payload = self._complete_json(
+            messages,
+            model=_resolve_model(self.planning_model, self.client.model if self.client else "gpt-5.1-codex"),
+            temperature=self.planning_temperature,
+        )
+        if not payload:
+            return None
+
+        paths = self._normalize_paths(payload.get("market_paths"))
+        unique_paths: List[List[str]] = []
+        seen = set()
+        for path in paths:
+            key = tuple(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_paths.append(path)
+            if len(unique_paths) >= bounded_max_paths:
+                break
+
+        if not unique_paths:
+            return None
+
+        return LLMPathProposal(
+            market_paths=unique_paths,
+            confidence=self._clamp01(payload.get("confidence")),
+            reason=_normalize_text(payload.get("reason")) or "LLM 已生成细分路径候选",
         )
 
     def enrich_hit(
@@ -378,9 +536,12 @@ class LLMOrchestrator:
             {
                 "role": "system",
                 "content": (
-                    "EXTRACT: 你是证据抽取器。"
+                    "EXTRACT: 你是“证据数字抽取器（严格模式）”。"
                     "只输出 JSON，不要输出解释。"
-                    "任务是从证据文本中抽取年份、市场规模、占比和置信度。"
+                    "只允许抽取文本中明确出现的数字与单位，不允许猜测或补全。"
+                    "若缺少明确数字，请返回 null。"
+                    "ratio 必须是 0-1 小数；百分号需自行换算。"
+                    "优先抽取“市场规模/占比/增长率”相关语句中的最近年份数据。"
                 ),
             },
             {
@@ -390,6 +551,7 @@ class LLMOrchestrator:
                         "task": "EXTRACT",
                         "company_name": input_model.company_name,
                         "product_name": input_model.product_name,
+                        "product_code": input_model.product_code,
                         "current_path": list(current_path),
                         "round_index": round_index,
                         "title": hit.title,
@@ -401,6 +563,11 @@ class LLMOrchestrator:
                             "ratio": hit.extracted_ratio,
                             "confidence": hit.confidence,
                         },
+                        "hard_rules": [
+                            "只信原文片段，不信常识猜测",
+                            "遇到多个数字时，优先与“市场规模/占比/增长率”强关联的数字",
+                            "若无法区分是总市场还是细分市场，降低 confidence",
+                        ],
                         "output_schema": {
                             "year": "integer|null",
                             "market_size": "number|null",
@@ -426,6 +593,177 @@ class LLMOrchestrator:
             market_size=_normalize_optional_float(payload.get("market_size")),
             ratio=_normalize_optional_float(payload.get("ratio")),
             confidence=self._clamp01(payload.get("confidence")),
+        )
+
+    def validate_market_fit(
+        self,
+        *,
+        input_model: InferenceInput,
+        current_path: Sequence[str],
+        latest_year: int,
+        market_size: Optional[float],
+        market_share: Optional[float],
+        evidence_summary: Sequence[Dict[str, Any]],
+    ) -> Optional[LLMFitCheck]:
+        if not self.is_available():
+            return None
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是“主导产品-细分市场一致性审核器（生产闸门）”。"
+                    "只输出 JSON，不要输出解释。"
+                    "你必须判断主导产品是否合理归属到当前细分路径。"
+                    "判断要结合产品名称、产品介绍、企业介绍、产品代码线索。"
+                    "可以参考秘塔/元宝摘要做判断，但若缺少原文依据必须在 reason 明确标注。"
+                    "禁止为了达标而放宽到明显不相关市场。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "task": "FIT_CHECK",
+                        "company_name": input_model.company_name,
+                        "product_name": input_model.product_name,
+                        "product_code": input_model.product_code,
+                        "product_intro": input_model.product_intro,
+                        "company_intro": input_model.company_intro,
+                        "current_market_path": list(current_path),
+                        "latest_year": latest_year,
+                        "market_size_latest_year_wan_cny": market_size,
+                        "market_share_latest_year": market_share,
+                        "evidence_summary": list(evidence_summary),
+                        "criteria": [
+                            "主导产品与细分市场定义一致",
+                            "证据中的应用场景和技术特征与产品描述不冲突，且尽量对上关键特征",
+                            "若细分市场范围明显大于主导产品能力边界，应优先判定不一致",
+                            "即使不是完美匹配，也要达到“合理可解释”标准",
+                        ],
+                        "output_schema": {
+                            "is_aligned": "boolean",
+                            "confidence": "number",
+                            "reason": "string",
+                            "matched_points": "string[]",
+                            "conflict_points": "string[]",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+
+        payload = self._complete_json(
+            messages,
+            model=_resolve_model(self.planning_model, self.client.model if self.client else "gpt-5.1-codex"),
+            temperature=min(0.2, self.planning_temperature),
+        )
+        if not payload:
+            return None
+
+        matched_points = _normalize_text_list(payload.get("matched_points"))
+        conflict_points = _normalize_text_list(payload.get("conflict_points"))
+        reason = _normalize_text(payload.get("reason")) or "LLM 未返回一致性原因"
+        if matched_points:
+            reason = f"{reason}；匹配点：{'；'.join(matched_points)}"
+        if conflict_points:
+            reason = f"{reason}；冲突点：{'；'.join(conflict_points)}"
+
+        return LLMFitCheck(
+            is_aligned=bool(payload.get("is_aligned", False)),
+            confidence=self._clamp01(payload.get("confidence")),
+            reason=reason,
+            matched_points=matched_points,
+            conflict_points=conflict_points,
+        )
+
+    def review_evidence_hit(
+        self,
+        *,
+        input_model: InferenceInput,
+        current_path: Sequence[str],
+        latest_year: int,
+        hit: ProviderHit,
+    ) -> Optional[LLMEvidenceReview]:
+        if not self.is_available():
+            return None
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是“检索证据审核器（严格）”。"
+                    "只输出 JSON，不要输出解释。"
+                    "你必须做两步判断："
+                    "1) 该证据是否属于目标细分市场路径；"
+                    "2) 该证据中的数字是否可用于市场规模/占有率计算。"
+                    "如果证据市场不匹配或数字口径可疑，必须拒绝（false）并写明原因。"
+                    "禁止为了凑结果放宽标准。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "task": "EVIDENCE_REVIEW",
+                        "company_name": input_model.company_name,
+                        "product_name": input_model.product_name,
+                        "product_code": input_model.product_code,
+                        "product_intro": input_model.product_intro,
+                        "company_intro": input_model.company_intro,
+                        "target_market_path": list(current_path),
+                        "latest_year": latest_year,
+                        "evidence": {
+                            "provider": hit.provider,
+                            "title": hit.title,
+                            "url": hit.url,
+                            "search_page_url": hit.search_page_url,
+                            "snippet": hit.snippet,
+                            "extracted_year": hit.extracted_year,
+                            "extracted_market_size": hit.extracted_market_size,
+                            "extracted_ratio": hit.extracted_ratio,
+                            "extracted_growth_rate": hit.extracted_growth_rate,
+                            "source_verified": hit.source_verified,
+                        },
+                        "criteria": [
+                            "市场定义、应用场景、技术特征与目标细分路径不冲突",
+                            "数值口径清晰（年份、单位/币种、指标类型）",
+                            "优先最近年份，过旧数据需降置信度",
+                            "明显是泛市场/无关市场的数据应拒绝",
+                        ],
+                        "output_schema": {
+                            "is_target_market": "boolean",
+                            "data_quality_passed": "boolean",
+                            "confidence": "number",
+                            "reason": "string",
+                            "issues": ["string"],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+
+        payload = self._complete_json(
+            messages,
+            model=_resolve_model(self.planning_model, self.client.model if self.client else "gpt-5.1-codex"),
+            temperature=min(0.2, self.planning_temperature),
+        )
+        if not payload:
+            return None
+
+        reason = _normalize_text(payload.get("reason")) or "LLM 未返回证据审核结论"
+        issues = _normalize_text_list(payload.get("issues"), limit=8)
+        if issues:
+            reason = f"{reason}；问题点：{'；'.join(issues)}"
+
+        return LLMEvidenceReview(
+            is_target_market=bool(payload.get("is_target_market", False)),
+            data_quality_passed=bool(payload.get("data_quality_passed", False)),
+            confidence=self._clamp01(payload.get("confidence")),
+            reason=reason,
+            issues=issues,
         )
 
     def _complete_json(

@@ -1,23 +1,39 @@
 import zipfile
 import os
 import json
+import urllib.parse
 import xml.etree.ElementTree as ET
 import copy
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import List, Optional, Literal
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from inference import (
+    CancelTaskResponse,
     CreateTaskResponse,
     InferConfigPatch,
     InferenceConfig,
     InferenceInput,
     InferenceTaskManager,
     TaskResult,
+    TaskStatus,
 )
+from other_proof import (
+    OtherProofError,
+    generate_other_chapter1,
+    generate_other_docx,
+    lookup_other_companies,
+)
+
+def register_all_namespaces(xml_content):
+    import re
+    # Extract all xmlns:prefix="uri" from the XML content
+    ns_matches = re.findall(r'xmlns:([^=]+)="([^"]+)"', xml_content.decode('utf-8') if isinstance(xml_content, bytes) else xml_content)
+    for prefix, uri in ns_matches:
+        ET.register_namespace(prefix, uri)
 
 namespaces = {
     'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
@@ -50,7 +66,45 @@ class Competitor(BaseModel):
     p24: str
     p25: str
 
+
+class OtherProofLayer(BaseModel):
+    name: str
+    analysis: str = ""
+    url: str = ""
+
+
+class Chapter1Section(BaseModel):
+    key: str
+    title: str
+    paragraphs: List[str]
+
+
+class ResolvedCompanyProfile(BaseModel):
+    requested_name: str
+    company_name: str
+    company_url: str
+    registered_capital: str = ""
+    established_date: str = ""
+    legal_representative: str = ""
+    company_address: str = ""
+    main_business: str = ""
+    matched_exactly: bool = False
+
+
+class CompanyLookupItem(BaseModel):
+    company_name: str
+    confirmed_url: Optional[str] = None
+
+
+class Chapter1Request(BaseModel):
+    product_name: str
+
+
+class CompanyLookupRequest(BaseModel):
+    companies: List[CompanyLookupItem]
+
 class DataModel(BaseModel):
+    template_type: Literal["self", "other"]
     province: str
     company_name: str
     product_name: str
@@ -64,6 +118,12 @@ class DataModel(BaseModel):
     sale_25: str; total_mkt_25: str; pct_25: str; rank_25: str
     sources: List[SourceBlock]
     competitors: List[Competitor]
+    company_intro_text: Optional[str] = None
+    proof_scope: Optional[str] = None
+    market_name: Optional[str] = None
+    chapter2_layers: List[OtherProofLayer] = Field(default_factory=list)
+    chapter1_sections: List[Chapter1Section] = Field(default_factory=list)
+    resolved_company_profiles: List[ResolvedCompanyProfile] = Field(default_factory=list)
 
 def generate_docx_v4(data: dict, template_path, output_path):
     # 1. Open template to prepare tree
@@ -71,6 +131,7 @@ def generate_docx_v4(data: dict, template_path, output_path):
         xml_content = z.read("word/document.xml")
         file_map = {name: z.read(name) for name in z.namelist()}
     
+    register_all_namespaces(xml_content)
     tree = ET.fromstring(xml_content)
     
     # 2. Dry run to map fields to w:p elements
@@ -258,6 +319,7 @@ app.add_middleware(
 )
 
 TEMPLATE_PATH = "0315-浙江达航数据技术有限公司-自证-初版.docx"
+OTHER_TEMPLATE_PATH = "0323-高安全性自锁紧型电源连接系统市场占有率证明报告-初版.docx"
 
 inference_task_manager = InferenceTaskManager()
 
@@ -278,6 +340,14 @@ def get_inference_task(task_id: str):
     return task
 
 
+@app.post("/infer-market-share/{task_id}/cancel", response_model=CancelTaskResponse)
+def cancel_inference_task(task_id: str):
+    result = inference_task_manager.cancel(task_id)
+    if not result.accepted and result.status == TaskStatus.FAILED:
+        raise HTTPException(status_code=404, detail=result.message or "推理任务不存在")
+    return result
+
+
 @app.get("/infer-config", response_model=InferenceConfig)
 def get_inference_config():
     return inference_task_manager.get_config()
@@ -290,11 +360,49 @@ def update_inference_config(patch: InferConfigPatch):
     except Exception:
         raise HTTPException(status_code=400, detail="配置更新失败，请检查参数")
 
+
+@app.post("/other-proof/chapter1")
+def generate_other_proof_chapter1_api(payload: Chapter1Request):
+    try:
+        return generate_other_chapter1(payload.product_name, inference_task_manager.get_config())
+    except OtherProofError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/other-proof/company-lookup")
+def lookup_other_proof_companies_api(payload: CompanyLookupRequest):
+    try:
+        return lookup_other_companies([item.model_dump() for item in payload.companies])
+    except OtherProofError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 @app.post("/generate")
 def generate_api(data: DataModel):
     try:
-        generate_docx_v4(data.dict(), TEMPLATE_PATH, "output.docx")
-        return FileResponse("output.docx", media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename="output.docx")
+        if data.template_type == "self":
+            generate_docx_v4(data.model_dump(), TEMPLATE_PATH, "output.docx")
+            return FileResponse("output.docx", media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename="output.docx")
+        if data.template_type == "other":
+            warnings = generate_other_docx(data.model_dump(), OTHER_TEMPLATE_PATH, "output.docx")
+            headers = {}
+            if warnings:
+                headers["X-Generate-Warnings"] = urllib.parse.quote(json.dumps(warnings, ensure_ascii=False))
+            return FileResponse(
+                "output.docx",
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                filename="output.docx",
+                headers=headers,
+            )
+        else:
+            raise HTTPException(status_code=400, detail="不支持的模板类型")
+    except OtherProofError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
