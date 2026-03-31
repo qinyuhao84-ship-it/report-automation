@@ -1,7 +1,8 @@
 from .config import ConfigStore
 from .engine import MarketInferenceEngine
-from .llm_orchestrator import LLMExtraction, LLMOrchestrator, LLMPlan, OpenAICompatibleClient
+from .llm_orchestrator import LLMExtraction, LLMFitCheck, LLMOrchestrator, LLMPlan, OpenAICompatibleClient
 from .models import (
+    CancelTaskResponse,
     CreateTaskResponse,
     InferConfigPatch,
     InferenceConfig,
@@ -14,12 +15,14 @@ from .task_manager import InferenceTaskManager
 
 __all__ = [
     "ConfigStore",
+    "CancelTaskResponse",
     "CreateTaskResponse",
     "InferConfigPatch",
     "InferenceConfig",
     "InferenceInput",
     "InferenceTaskManager",
     "LLMExtraction",
+    "LLMFitCheck",
     "LLMOrchestrator",
     "LLMPlan",
     "MarketInferenceEngine",
