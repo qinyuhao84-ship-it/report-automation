@@ -47,8 +47,16 @@ CHAPTER1_VISIBLE_PARAGRAPH_COUNTS: Dict[str, int] = {
     "industry_history": 2,
     "industry_environment": 5,
     "industry_trends": 6,
-    "industry_supply_chain": 4,
+    "industry_supply_chain": 5,
 }
+
+SUPPLY_CHAIN_SUBTOPICS: List[str] = [
+    "上游原材料与核心零部件",
+    "中游制造与装配环节",
+    "下游应用行业与客户结构",
+    "渠道流通与交付协同",
+    "供应链风险与优化趋势",
+]
 
 CHAPTER1_SPEC_MAP = {item["key"]: item for item in CHAPTER1_SECTION_SPECS}
 EXPECTED_CHAPTER1_SLOT_COUNT = sum(item["slot_count"] for item in CHAPTER1_SECTION_SPECS)
@@ -128,6 +136,8 @@ def normalize_chapter1_sections(raw_sections: Any) -> tuple[List[Dict[str, Any]]
         title = spec["title"]
         slot_count = spec["slot_count"]
         paragraphs = _merge_heading_like_paragraphs(list(normalized_map.get(key, [])))
+        if key == "industry_supply_chain":
+            paragraphs = _ensure_supply_chain_subsections(paragraphs)
         if not paragraphs:
             warnings.append(f"第一章《{title}》未生成成功，已写入占位内容")
             paragraphs = [PLACEHOLDER_TEXT]
@@ -893,21 +903,25 @@ def _is_yellow_run(run: ET.Element) -> bool:
 
 
 def _set_paragraph_text(paragraph: ET.Element, text: str) -> None:
-    runs = paragraph.findall("./w:r", NS)
-    if not runs:
-        run = ET.SubElement(paragraph, f"{{{NS['w']}}}r")
-        text_node = ET.SubElement(run, f"{{{NS['w']}}}t")
-        text_node.text = text
-        return
-    first = runs[0]
-    texts = first.findall("./w:t", NS)
-    text_node = texts[0] if texts else ET.SubElement(first, f"{{{NS['w']}}}t")
+    # 清空段落内所有正文节点（含 hyperlink），避免新旧链接文本串联。
+    ppr = paragraph.find("./w:pPr", NS)
+    direct_runs = paragraph.findall("./w:r", NS)
+    preserved_rpr = None
+    if direct_runs:
+        first_rpr = direct_runs[0].find("./w:rPr", NS)
+        if first_rpr is not None:
+            preserved_rpr = copy.deepcopy(first_rpr)
+
+    for child in list(paragraph):
+        if ppr is not None and child is ppr:
+            continue
+        paragraph.remove(child)
+
+    run = ET.SubElement(paragraph, f"{{{NS['w']}}}r")
+    if preserved_rpr is not None:
+        run.append(preserved_rpr)
+    text_node = ET.SubElement(run, f"{{{NS['w']}}}t")
     text_node.text = text
-    for extra in texts[1:]:
-        first.remove(extra)
-    for other in runs[1:]:
-        for node in other.findall("./w:t", NS):
-            node.text = ""
 
 
 
@@ -1034,6 +1048,41 @@ def _fit_paragraphs_to_slot_count(paragraphs: Sequence[str], slot_count: int, ti
     return fitted[:slot_count], warnings
 
 
+def _ensure_supply_chain_subsections(paragraphs: Sequence[str]) -> List[str]:
+    result: List[str] = []
+    indexed: Dict[int, str] = {}
+    unlabeled: List[str] = []
+    for raw in paragraphs:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        match = re.match(r"^[（(]([一二三四五12345])[）)]", text)
+        if match:
+            token = match.group(1)
+            index_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5}
+            idx = index_map.get(token)
+            if idx and idx not in indexed:
+                indexed[idx] = text
+                continue
+        unlabeled.append(text)
+
+    cn_idx = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五"}
+    for idx, topic in enumerate(SUPPLY_CHAIN_SUBTOPICS, start=1):
+        if idx in indexed:
+            result.append(indexed[idx])
+            continue
+        if unlabeled:
+            base = unlabeled.pop(0)
+            result.append(f"（{cn_idx[idx]}）{topic}：{base}")
+        else:
+            result.append(
+                f"（{cn_idx[idx]}）{topic}：该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
+            )
+
+    result.extend(unlabeled)
+    return result
+
+
 def _find_best_split_index(paragraphs: Sequence[str]) -> int | None:
     candidates = [idx for idx, text in enumerate(paragraphs) if len(str(text).strip()) >= 80]
     if not candidates:
@@ -1102,7 +1151,7 @@ def _build_chapter1_prompt(product_name: str) -> str:
     spec_text = "\n".join(specs)
     return (
         f"产品：{product_name}。为这个产品撰写行业研究报告。\n"
-        "要求：不要出现数据，尽可能通过文字描述。5000字左右。注意用词用语。\n"
+        "要求：不要出现数据，尽可能通过文字描述。全文控制在 2800-3200 字，优先保证目录完整。注意用词用语。\n"
         "目标：撰写报告\n"
         "受众：专业人士\n"
         "类型：行业研究报告\n"
@@ -1118,6 +1167,11 @@ def _build_chapter1_prompt(product_name: str) -> str:
         "（一）行业发展环境\n"
         "（二）行业发展趋势\n"
         "五、行业供应链\n"
+        "（一）上游原材料与核心零部件\n"
+        "（二）中游制造与装配环节\n"
+        "（三）下游应用行业与客户结构\n"
+        "（四）渠道流通与交付协同\n"
+        "（五）供应链风险与优化趋势\n"
         "\n"
         "为了写入模板，必须严格输出 JSON，结构如下：\n"
         '{"sections":[{"key":"background_overview","title":"背景与概述","paragraphs":["..."]}]}\n'
@@ -1128,6 +1182,7 @@ def _build_chapter1_prompt(product_name: str) -> str:
         "3. 不要使用项目符号、清单式罗列、词条式拆分，也不要输出除 JSON 之外的任何文字。\n"
         "4. 内容必须是面向专业人士的行业研究报告写法，不要口语化，不要写企业私有数据，不要写“待补充”。\n"
         "5. paragraphs 数量可以多于或少于模板槽位，系统会自动重组；你的重点是把内容写成完整文章段落。\n"
+        "6. industry_supply_chain 必须包含“（一）到（五）”五个小分类，每个小分类至少 1 段，不得遗漏。\n"
     )
 
 
