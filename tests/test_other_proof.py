@@ -7,6 +7,7 @@ from other_proof import (
     _build_chart_number_plan,
     _build_chapter1_prompt,
     _build_company_rows,
+    _highlight_self_row_in_comparison_table,
     _rewrite_summary_market_research_phrase,
     _rewrite_dynamic_chart_references,
     _rewrite_other_header_titles,
@@ -297,3 +298,37 @@ def test_rewrite_summary_market_research_phrase_uses_product_name():
     _rewrite_summary_market_research_phrase(root, "新主导产品")
     rendered = "".join(node.text or "" for node in root.findall(f".//{{{ns}}}t"))
     assert "对“新主导产品”细分市场进行拆分和规模测算" in rendered
+
+
+def test_highlight_self_row_in_comparison_table_only_bolds_self_row():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    root = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            <w:tbl>
+              <w:tr><w:tc><w:p><w:r><w:t>头1</w:t></w:r></w:p></w:tc></w:tr>
+              <w:tr><w:tc><w:p><w:r><w:t>头2</w:t></w:r></w:p></w:tc></w:tr>
+              <w:tr><w:tc><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>企业A</w:t></w:r></w:p></w:tc></w:tr>
+              <w:tr><w:tc><w:p><w:r><w:t>我司</w:t></w:r></w:p></w:tc></w:tr>
+              <w:tr><w:tc><w:p><w:r><w:t>企业C</w:t></w:r></w:p></w:tc></w:tr>
+            </w:tbl>
+          </w:body>
+        </w:document>
+        """
+    )
+    body = root.find(f".//{{{ns}}}body")
+    assert body is not None
+    _highlight_self_row_in_comparison_table(body=body, table_index=0, self_company_name="我司")
+
+    rows = root.findall(f".//{{{ns}}}tbl/{{{ns}}}tr")
+    data_rows = rows[2:]
+    # 企业A 行应去掉加粗
+    a_bold = data_rows[0].find(f".//{{{ns}}}rPr/{{{ns}}}b")
+    assert a_bold is None
+    # 我司行应加粗
+    self_bold = data_rows[1].find(f".//{{{ns}}}rPr/{{{ns}}}b")
+    assert self_bold is not None
+    # 企业C 不加粗
+    c_bold = data_rows[2].find(f".//{{{ns}}}rPr/{{{ns}}}b")
+    assert c_bold is None

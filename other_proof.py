@@ -805,6 +805,11 @@ def _postprocess_other_document(
         proof_scope=proof_scope,
         product_name=product_name,
     )
+    _highlight_self_row_in_comparison_table(
+        body=body,
+        table_index=metadata["comparison_table_index"],
+        self_company_name=self_row["display_name"],
+    )
     _rewrite_chart9_labels(children[metadata["chart9_table_index"]], proof_scope)
 
 
@@ -915,6 +920,56 @@ def _rewrite_summary_market_research_phrase(root: ET.Element, product_name: str)
         updated = pattern.sub(replacement, text)
         if updated != text:
             _set_paragraph_text(paragraph, updated)
+
+
+def _highlight_self_row_in_comparison_table(*, body: ET.Element, table_index: int, self_company_name: str) -> None:
+    children = list(body)
+    if table_index >= len(children):
+        return
+    table = children[table_index]
+    if table.tag != f"{{{NS['w']}}}tbl":
+        return
+    rows = table.findall("./w:tr", NS)
+    if len(rows) <= 2:
+        return
+
+    data_rows = rows[2:]
+    for row in data_rows:
+        _set_table_row_bold(row, bold=False)
+
+    target = None
+    for row in data_rows:
+        company_name = _get_row_first_cell_text(row)
+        if company_name == self_company_name:
+            target = row
+            break
+    if target is not None:
+        _set_table_row_bold(target, bold=True)
+
+
+def _get_row_first_cell_text(row: ET.Element) -> str:
+    cells = row.findall("./w:tc", NS)
+    if not cells:
+        return ""
+    texts = cells[0].findall(".//w:t", NS)
+    return "".join(node.text or "" for node in texts).strip()
+
+
+def _set_table_row_bold(row: ET.Element, *, bold: bool) -> None:
+    runs = row.findall(".//w:r", NS)
+    for run in runs:
+        rpr = run.find("./w:rPr", NS)
+        if rpr is None:
+            if not bold:
+                continue
+            rpr = ET.SubElement(run, f"{{{NS['w']}}}rPr")
+        existing = rpr.find("./w:b", NS)
+        if bold:
+            if existing is None:
+                ET.SubElement(rpr, f"{{{NS['w']}}}b")
+        else:
+            if existing is not None:
+                rpr.remove(existing)
 
 
 
