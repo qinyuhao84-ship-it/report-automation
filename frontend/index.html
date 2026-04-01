@@ -40,7 +40,7 @@
     }
 
     .site {
-      width: min(1240px, calc(100% - 32px));
+      width: min(1240px, calc(100% - 24px));
       margin: 18px auto 28px;
     }
 
@@ -81,15 +81,18 @@
     .layout {
       margin-top: 14px;
       display: grid;
-      grid-template-columns: 280px 1fr;
-      gap: 14px;
+      grid-template-columns: 236px minmax(0, 1fr);
+      gap: 12px;
     }
+
+    .layout > * { min-width: 0; }
+    main { min-width: 0; }
 
     .guide {
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      padding: 14px;
+      padding: 12px;
       box-shadow: 0 4px 16px rgba(17, 50, 41, 0.05);
       height: fit-content;
       position: sticky;
@@ -164,6 +167,7 @@
       box-shadow: 0 4px 16px rgba(17, 50, 41, 0.05);
       margin-bottom: 12px;
       animation: enter 360ms ease-out;
+      min-width: 0;
     }
 
     .panel h3 {
