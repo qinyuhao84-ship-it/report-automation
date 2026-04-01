@@ -800,8 +800,10 @@
   <script>
     const DRAFT_KEY = "report_automation_draft_v4";
     const MANUAL_DRAFT_KEY = "report_automation_manual_draft_v1";
+    const DRAFT_BACKUP_KEY = "report_automation_draft_backup_v1";
     let sourceCount = 0;
     let autoSaveTimer = null;
+    let lastSavedSnapshotText = "";
     let lastInferenceTaskId = null;
     let inferencePollTimer = null;
     let inferencePolling = false;
@@ -836,7 +838,7 @@
       if (autoSaveTimer) clearTimeout(autoSaveTimer);
       autoSaveTimer = setTimeout(() => {
         saveDraft(true);
-      }, 300);
+      }, 800);
     }
 
     function safeNum(v) {
@@ -2052,16 +2054,26 @@
         other_pending_companies: otherProofPendingCompanies,
       };
       otherProofResolvedProfiles = manualProfiles;
+      let snapshotText = "";
       try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify(snapshot));
+        snapshotText = JSON.stringify(snapshot);
+        if (isAuto && snapshotText === lastSavedSnapshotText) {
+          return true;
+        }
+        const previousAuto = localStorage.getItem(DRAFT_KEY);
+        if (previousAuto && previousAuto !== snapshotText) {
+          localStorage.setItem(DRAFT_BACKUP_KEY, previousAuto);
+        }
+        localStorage.setItem(DRAFT_KEY, snapshotText);
         if (!isAuto) {
-          localStorage.setItem(MANUAL_DRAFT_KEY, JSON.stringify(snapshot));
+          localStorage.setItem(MANUAL_DRAFT_KEY, snapshotText);
         }
       } catch (_e) {
         updateDraftMeta("草稿保存失败");
         setStatus("草稿保存失败：浏览器本地存储不可用", "error");
         return false;
       }
+      lastSavedSnapshotText = snapshotText;
       const now = new Date();
       const stamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
       updateDraftMeta(`${isAuto ? "自动保存" : "手动保存"} ${stamp}`);
@@ -2072,6 +2084,7 @@
     function loadDraft(silent = false, preferManual = true) {
       const manualRaw = localStorage.getItem(MANUAL_DRAFT_KEY);
       const autoRaw = localStorage.getItem(DRAFT_KEY);
+      const backupRaw = localStorage.getItem(DRAFT_BACKUP_KEY);
       const parseDraft = (raw) => {
         if (!raw) return null;
         try {
@@ -2084,13 +2097,14 @@
       };
       const manualDraft = parseDraft(manualRaw);
       const autoDraft = parseDraft(autoRaw);
-      if (!manualDraft && !autoDraft) {
+      const backupDraft = parseDraft(backupRaw);
+      if (!manualDraft && !autoDraft && !backupDraft) {
         if (!silent) setStatus("没有可恢复的草稿", "error");
         return;
       }
 
       let sourceType = "auto";
-      let d = autoDraft || manualDraft;
+      let d = autoDraft || manualDraft || backupDraft;
       if (manualDraft && autoDraft) {
         const manualTs = Number(manualDraft.saved_ts || 0);
         const autoTs = Number(autoDraft.saved_ts || 0);
@@ -2112,6 +2126,9 @@
       } else if (manualDraft) {
         d = manualDraft;
         sourceType = "manual";
+      } else if (!autoDraft && backupDraft) {
+        d = backupDraft;
+        sourceType = "backup";
       }
 
       try {
@@ -2157,7 +2174,14 @@
 
         ["23", "24", "25"].forEach(calcMyPct);
         updateProgress();
-        updateDraftMeta(sourceType === "manual" ? "手动草稿已恢复" : "自动草稿已恢复");
+        try {
+          lastSavedSnapshotText = JSON.stringify(d);
+        } catch (_e) {
+          lastSavedSnapshotText = "";
+        }
+        if (sourceType === "manual") updateDraftMeta("手动草稿已恢复");
+        else if (sourceType === "backup") updateDraftMeta("草稿备份已恢复");
+        else updateDraftMeta("自动草稿已恢复");
         if (lastInferenceTaskId) {
           setInferenceControls(true);
           clearInferencePoll();
@@ -2230,9 +2254,20 @@
     function clearDraft() {
       localStorage.removeItem(DRAFT_KEY);
       localStorage.removeItem(MANUAL_DRAFT_KEY);
+      localStorage.removeItem(DRAFT_BACKUP_KEY);
+      lastSavedSnapshotText = "";
       resetFormToBlank();
       updateDraftMeta("草稿已清空");
       setStatus("草稿已清空，页面已重置");
+    }
+
+    function isFormEssentiallyEmpty() {
+      const keyFields = [
+        "company_name", "product_name", "product_code",
+        "company_intro", "product_intro",
+        "sale_23", "sale_24", "sale_25",
+      ];
+      return keyFields.every((id) => !String(document.getElementById(id)?.value || "").trim());
     }
 
     function bindAutoSave() {
@@ -2265,6 +2300,14 @@
           updateProgress();
         }
       });
+
+      document.addEventListener("blur", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.matches("input, textarea, select")) {
+          saveDraft(true);
+        }
+      }, true);
     }
 
     initDates();
@@ -2276,17 +2319,25 @@
     bindAutoSave();
     toggleTemplateMode();
     updateProgress();
-    updateDraftMeta((localStorage.getItem(DRAFT_KEY) || localStorage.getItem(MANUAL_DRAFT_KEY)) ? "检测到本地草稿，点击“恢复草稿”加载" : "草稿未保存");
+    const hasAnyDraft = !!(localStorage.getItem(DRAFT_KEY) || localStorage.getItem(MANUAL_DRAFT_KEY) || localStorage.getItem(DRAFT_BACKUP_KEY));
+    let autoRestoredAtBoot = false;
+    updateDraftMeta(hasAnyDraft ? "检测到本地草稿，可直接恢复" : "草稿未保存");
+    if (hasAnyDraft && isFormEssentiallyEmpty()) {
+      loadDraft(true, true);
+      setStatus("已自动恢复最近草稿");
+      autoRestoredAtBoot = true;
+    }
     if (lastInferenceTaskId) {
       setInferenceControls(true);
       setStatus(`已恢复任务 ${lastInferenceTaskId}，正在同步进度...`);
       pollInferenceTask(lastInferenceTaskId);
     } else {
       setInferenceControls(false);
-      setStatus("页面已就绪，可开始录入");
+      if (!autoRestoredAtBoot) setStatus("页面已就绪，可开始录入");
     }
 
     window.addEventListener("beforeunload", () => {
+      saveDraft(true);
       clearInferencePoll();
     });
   </script>

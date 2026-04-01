@@ -242,6 +242,11 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
         warnings=warnings,
     )
     _compress_chapter1_visual_paragraphs(root, field_paragraphs)
+    _rewrite_other_header_titles(
+        file_map=file_map,
+        company_name=self_row["display_name"],
+        product_name=str(data.get("product_name") or "").strip(),
+    )
 
     file_map["word/document.xml"] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -859,6 +864,40 @@ def _rewrite_dynamic_chart_references(
 
         if "由以上分析可知" in text and "市场地位结论成立" in text:
             _set_paragraph_text(child, chapter4_dynamic_conclusion)
+
+
+def _rewrite_other_header_titles(file_map: Dict[str, bytes], company_name: str, product_name: str) -> None:
+    product_title = f"{product_name}市场占有率证明报告"
+    combined_title = f"{company_name}{product_title}"
+    for name, blob in list(file_map.items()):
+        if not name.startswith("word/header") or not name.endswith(".xml"):
+            continue
+        try:
+            root = ET.fromstring(blob)
+        except ET.ParseError:
+            continue
+
+        paragraphs: List[ET.Element] = []
+        texts: List[str] = []
+        for paragraph in root.findall(".//w:p", namespaces=NS):
+            text = _get_paragraph_text(paragraph).strip()
+            if not text:
+                continue
+            paragraphs.append(paragraph)
+            texts.append(text)
+
+        title_index = next((idx for idx, text in enumerate(texts) if "市场占有率证明报告" in text), -1)
+        changed = False
+        if title_index >= 0:
+            if title_index > 0:
+                _set_paragraph_text(paragraphs[title_index - 1], company_name)
+                _set_paragraph_text(paragraphs[title_index], product_title)
+            else:
+                _set_paragraph_text(paragraphs[title_index], combined_title)
+            changed = True
+
+        if changed:
+            file_map[name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
 

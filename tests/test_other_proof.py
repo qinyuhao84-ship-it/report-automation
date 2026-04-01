@@ -8,6 +8,7 @@ from other_proof import (
     _build_chapter1_prompt,
     _build_company_rows,
     _rewrite_dynamic_chart_references,
+    _rewrite_other_header_titles,
     _set_paragraph_text,
     _validate_manual_company_profiles,
     _ensure_supply_chain_subsections,
@@ -257,3 +258,25 @@ def test_ensure_supply_chain_subsections_splits_combined_markers():
     assert "（三）" not in result[2]
     assert "A" in result[1]
     assert "B" in result[2]
+
+
+def test_rewrite_other_header_titles_updates_header_company_and_product():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    header_xml = f"""
+    <w:hdr xmlns:w="{ns}">
+      <w:p><w:r><w:t>宁波意缆可电器有限公司高安全性自锁紧型电源连接系统市场占有率证明报告</w:t></w:r></w:p>
+      <w:p><w:r><w:t>不应修改</w:t></w:r></w:p>
+    </w:hdr>
+    """.strip().encode("utf-8")
+    file_map = {"word/header2.xml": header_xml}
+
+    _rewrite_other_header_titles(
+        file_map=file_map,
+        company_name="宏一集团有限公司",
+        product_name="电源连接器系统",
+    )
+
+    root = ET.fromstring(file_map["word/header2.xml"])
+    rendered = "".join(node.text or "" for node in root.findall(f".//{{{ns}}}t"))
+    assert "宏一集团有限公司电源连接器系统市场占有率证明报告" in rendered
+    assert "不应修改" in rendered

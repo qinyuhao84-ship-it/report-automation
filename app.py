@@ -54,6 +54,51 @@ def is_yellow_run(r):
             return True
     return False
 
+
+def rewrite_header_titles(file_map: dict, company_name: str, product_name: str) -> None:
+    product_title = f"{product_name}市场占有率证明报告"
+    combined_title = f"{company_name}{product_title}"
+    for name, blob in list(file_map.items()):
+        if not name.startswith("word/header") or not name.endswith(".xml"):
+            continue
+        try:
+            root = ET.fromstring(blob)
+        except ET.ParseError:
+            continue
+        paragraphs = []
+        texts = []
+        for p in root.findall(".//w:p", namespaces=NS):
+            text = "".join((t.text or "") for t in p.findall(".//w:t", namespaces=NS)).strip()
+            if not text:
+                continue
+            paragraphs.append(p)
+            texts.append(text)
+        title_index = next((idx for idx, text in enumerate(texts) if "市场占有率证明报告" in text), -1)
+        changed = False
+        if title_index >= 0:
+            def set_paragraph_text(p, value):
+                runs = p.findall('./w:r', namespaces=NS)
+                if not runs:
+                    return
+                first = runs[0]
+                ts = first.findall('./w:t', namespaces=NS)
+                t = ts[0] if ts else ET.SubElement(first, f"{{{NS['w']}}}t")
+                for ex in ts[1:]:
+                    first.remove(ex)
+                t.text = value
+                for other in runs[1:]:
+                    for ot in other.findall('./w:t', namespaces=NS):
+                        ot.text = ""
+
+            if title_index > 0:
+                set_paragraph_text(paragraphs[title_index - 1], company_name)
+                set_paragraph_text(paragraphs[title_index], product_title)
+            else:
+                set_paragraph_text(paragraphs[title_index], combined_title)
+            changed = True
+        if changed:
+            file_map[name] = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+
 class SourceBlock(BaseModel):
     name: str
     url: str
@@ -303,6 +348,11 @@ def generate_docx_v4(data: dict, template_path, output_path):
             if ch.tag == f"{{{NS['w']}}}highlight" and ch.get(f"{{{NS['w']}}}val") == 'yellow':
                 pe.remove(ch)
 
+    rewrite_header_titles(
+        file_map=file_map,
+        company_name=str(data.get("company_name", "")).strip(),
+        product_name=str(data.get("product_name", "")).strip(),
+    )
     file_map["word/document.xml"] = ET.tostring(tree, encoding='utf-8', xml_declaration=True)
     with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
         for n, d in file_map.items(): zout.writestr(n, d)

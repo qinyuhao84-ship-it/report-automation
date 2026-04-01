@@ -124,6 +124,23 @@ def test_other_chapter1_endpoint_returns_sections(monkeypatch):
     assert body["warnings"] == ["第一章部分段落不足，已补齐占位内容"]
 
 
+def test_rewrite_header_titles_updates_matching_header_paragraph():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    header_xml = f"""
+    <w:hdr xmlns:w="{ns}">
+      <w:p><w:r><w:t>旧公司旧产品市场占有率证明报告</w:t></w:r></w:p>
+      <w:p><w:r><w:t>页码信息</w:t></w:r></w:p>
+    </w:hdr>
+    """.strip().encode("utf-8")
+    file_map = {"word/header2.xml": header_xml}
+
+    app_module.rewrite_header_titles(file_map, "新公司", "新产品")
+
+    rendered = file_map["word/header2.xml"].decode("utf-8")
+    assert "新公司新产品市场占有率证明报告" in rendered
+    assert "页码信息" in rendered
+
+
 def test_other_company_lookup_endpoint_returns_resolved_profiles(monkeypatch):
     client = TestClient(app_module.app)
 
