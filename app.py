@@ -1,6 +1,7 @@
 import zipfile
 import os
 import json
+import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 import copy
@@ -98,6 +99,33 @@ def rewrite_header_titles(file_map: dict, company_name: str, product_name: str) 
             changed = True
         if changed:
             file_map[name] = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+
+
+def rewrite_summary_market_research_phrase(tree: ET.Element, product_name: str) -> None:
+    product_name = str(product_name or "").strip()
+    if not product_name:
+        return
+    pattern = re.compile(r"对[“\"].+?[”\"]细分市场进行拆分和规模测算")
+    replacement = f"对“{product_name}”细分市场进行拆分和规模测算"
+    for p in tree.findall(f".//{{{NS['w']}}}p"):
+        text = "".join((t.text or "") for t in p.findall(".//w:t", namespaces=NS))
+        if "细分市场进行拆分和规模测算" not in text:
+            continue
+        updated = pattern.sub(replacement, text)
+        if updated == text:
+            continue
+        runs = p.findall('./w:r', namespaces=NS)
+        if not runs:
+            continue
+        first = runs[0]
+        ts = first.findall('./w:t', namespaces=NS)
+        t = ts[0] if ts else ET.SubElement(first, f"{{{NS['w']}}}t")
+        for ex in ts[1:]:
+            first.remove(ex)
+        t.text = updated
+        for other in runs[1:]:
+            for ot in other.findall('./w:t', namespaces=NS):
+                ot.text = ""
 
 class SourceBlock(BaseModel):
     name: str
@@ -353,6 +381,7 @@ def generate_docx_v4(data: dict, template_path, output_path):
         company_name=str(data.get("company_name", "")).strip(),
         product_name=str(data.get("product_name", "")).strip(),
     )
+    rewrite_summary_market_research_phrase(tree, str(data.get("product_name", "")).strip())
     file_map["word/document.xml"] = ET.tostring(tree, encoding='utf-8', xml_declaration=True)
     with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
         for n, d in file_map.items(): zout.writestr(n, d)

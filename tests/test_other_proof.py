@@ -7,6 +7,7 @@ from other_proof import (
     _build_chart_number_plan,
     _build_chapter1_prompt,
     _build_company_rows,
+    _rewrite_summary_market_research_phrase,
     _rewrite_dynamic_chart_references,
     _rewrite_other_header_titles,
     _set_paragraph_text,
@@ -280,3 +281,19 @@ def test_rewrite_other_header_titles_updates_header_company_and_product():
     rendered = "".join(node.text or "" for node in root.findall(f".//{{{ns}}}t"))
     assert "宏一集团有限公司电源连接器系统市场占有率证明报告" in rendered
     assert "不应修改" in rendered
+
+
+def test_rewrite_summary_market_research_phrase_uses_product_name():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    root = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            <w:p><w:r><w:t>深入了解行业情况，对“旧产品名称”细分市场进行拆分和规模测算。</w:t></w:r></w:p>
+          </w:body>
+        </w:document>
+        """
+    )
+    _rewrite_summary_market_research_phrase(root, "新主导产品")
+    rendered = "".join(node.text or "" for node in root.findall(f".//{{{ns}}}t"))
+    assert "对“新主导产品”细分市场进行拆分和规模测算" in rendered

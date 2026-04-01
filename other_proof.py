@@ -241,6 +241,7 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
         product_name=str(data.get("product_name") or "").strip(),
         warnings=warnings,
     )
+    _rewrite_summary_market_research_phrase(root, str(data.get("product_name") or "").strip())
     _compress_chapter1_visual_paragraphs(root, field_paragraphs)
     _rewrite_other_header_titles(
         file_map=file_map,
@@ -898,6 +899,22 @@ def _rewrite_other_header_titles(file_map: Dict[str, bytes], company_name: str, 
 
         if changed:
             file_map[name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _rewrite_summary_market_research_phrase(root: ET.Element, product_name: str) -> None:
+    product_name = str(product_name or "").strip()
+    if not product_name:
+        return
+
+    pattern = re.compile(r"对[“\"].+?[”\"]细分市场进行拆分和规模测算")
+    replacement = f"对“{product_name}”细分市场进行拆分和规模测算"
+    for paragraph in root.findall(".//w:p", namespaces=NS):
+        text = _get_paragraph_text(paragraph)
+        if "细分市场进行拆分和规模测算" not in text:
+            continue
+        updated = pattern.sub(replacement, text)
+        if updated != text:
+            _set_paragraph_text(paragraph, updated)
 
 
 

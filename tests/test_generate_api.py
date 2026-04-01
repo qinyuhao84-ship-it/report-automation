@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import urllib.parse
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from fastapi.testclient import TestClient
 
@@ -139,6 +140,22 @@ def test_rewrite_header_titles_updates_matching_header_paragraph():
     rendered = file_map["word/header2.xml"].decode("utf-8")
     assert "新公司新产品市场占有率证明报告" in rendered
     assert "页码信息" in rendered
+
+
+def test_rewrite_summary_market_research_phrase_replaces_quoted_product():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    doc = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            <w:p><w:r><w:t>对“旧产品”细分市场进行拆分和规模测算。</w:t></w:r></w:p>
+          </w:body>
+        </w:document>
+        """
+    )
+    app_module.rewrite_summary_market_research_phrase(doc, "新产品")
+    rendered = "".join(node.text or "" for node in doc.findall(f".//{{{ns}}}t"))
+    assert "对“新产品”细分市场进行拆分和规模测算" in rendered
 
 
 def test_other_company_lookup_endpoint_returns_resolved_profiles(monkeypatch):
