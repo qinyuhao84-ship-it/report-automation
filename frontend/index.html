@@ -521,9 +521,11 @@
       gap: 6px;
       color: #d6f5ec;
       font-size: 12px;
+      flex-wrap: wrap;
     }
 
-    .draft-version select {
+    .draft-version select,
+    .draft-version input {
       border: 1px solid rgba(255, 255, 255, 0.35);
       background: rgba(255, 255, 255, 0.2);
       color: #f7fffc;
@@ -531,6 +533,11 @@
       padding: 6px 8px;
       font-size: 12px;
       outline: none;
+      min-width: 96px;
+    }
+
+    .draft-version input::placeholder {
+      color: rgba(247, 255, 252, 0.72);
     }
 
     .draft-version select option {
@@ -585,10 +592,14 @@
         <div class="draft-version">
           <label for="draftCompanySelect">企业</label>
           <select id="draftCompanySelect" onchange="onDraftCompanyChange()"></select>
+          <input id="draftNewCompanyName" placeholder="输入企业名称" />
+          <button class="btn subtle" type="button" onclick="createDraftCompany()">新建企业</button>
           <label for="draftVersionSelect">版本</label>
           <select id="draftVersionSelect"></select>
+          <label for="draftTargetVersionNo">版本号</label>
+          <select id="draftTargetVersionNo"></select>
         </div>
-        <button class="btn subtle" type="button" onclick="saveDraftVersion()">保留新版本</button>
+        <button class="btn subtle" type="button" onclick="saveDraftVersion()">保存为该版本</button>
         <button class="btn subtle" type="button" onclick="loadDraft()">恢复所选</button>
         <button class="btn subtle" type="button" onclick="deleteSelectedDraft()">删除所选</button>
         <button class="btn subtle" type="button" onclick="clearDraft()">清空草稿</button>
@@ -896,37 +907,36 @@
       return `第${item.versionNo}版（${formatTimeStamp(item.savedTs)}）`;
     }
 
+    function initTargetVersionOptions() {
+      const select = document.getElementById("draftTargetVersionNo");
+      if (!select) return;
+      select.innerHTML = "";
+      for (let i = 1; i <= 10; i += 1) {
+        select.add(new Option(`第${i}版`, String(i)));
+      }
+      select.value = "1";
+    }
+
     async function refreshDraftPickers(preferredCompany = "", preferredEntry = "") {
       const companySelect = document.getElementById("draftCompanySelect");
       const versionSelect = document.getElementById("draftVersionSelect");
       if (!companySelect || !versionSelect || !draftLibrary) return;
 
       const companies = await draftLibrary.listCompanies();
-      const currentCompany = getCurrentCompanyName();
-      const companyMap = new Map(companies.map((item) => [item.companyName, item]));
-      if (currentCompany && !companyMap.has(currentCompany)) {
-        companies.unshift({
-          companyName: currentCompany,
-          latestTs: Date.now(),
-          hasWorking: false,
-          versionCount: 0,
-        });
-      }
-
       companySelect.innerHTML = "";
       if (!companies.length) {
-        companySelect.add(new Option("暂无企业草稿", ""));
+        companySelect.add(new Option("请选择企业", ""));
         versionSelect.innerHTML = "";
-        versionSelect.add(new Option("暂无版本", ""));
+        versionSelect.add(new Option("请选择版本", ""));
         return;
       }
 
       companies.forEach((item) => {
-        const label = `${getCompanyDisplayName(item.companyName)}（版本 ${item.versionCount}）`;
+        const label = `${getCompanyDisplayName(item.companyName)}`;
         companySelect.add(new Option(label, item.companyName));
       });
 
-      let selectedCompany = preferredCompany || currentCompany || companies[0].companyName;
+      let selectedCompany = preferredCompany || companies[0].companyName;
       if (!companies.some((item) => item.companyName === selectedCompany)) {
         selectedCompany = companies[0].companyName;
       }
@@ -950,6 +960,43 @@
       }
     }
 
+    async function createDraftCompany() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，无法新建企业", "error");
+        return;
+      }
+      const input = document.getElementById("draftNewCompanyName");
+      const name = String(input?.value || "").trim();
+      if (!name) {
+        setStatus("请先输入企业名称", "error");
+        return;
+      }
+      const all = await draftLibrary.listCompanies();
+      if (all.some((item) => item.companyName === name)) {
+        await refreshDraftPickers(name, "");
+        if (input) input.value = "";
+        setStatus(`企业“${name}”已存在，已切换`);
+        return;
+      }
+
+      const snapshot = buildDraftSnapshot(false);
+      snapshot.company_name = name;
+      try {
+        await draftLibrary.saveWorkingDraft(name, snapshot, Number(snapshot.saved_ts) || Date.now());
+      } catch (err) {
+        setStatus(`新建企业失败：${err.message || "写入失败"}`, "error");
+        return;
+      }
+      const companyInput = document.getElementById("company_name");
+      if (companyInput && !String(companyInput.value || "").trim()) {
+        companyInput.value = name;
+      }
+      if (input) input.value = "";
+      await refreshDraftPickers(name, "working:0");
+      setStatus(`企业“${name}”已创建`);
+      updateDraftMeta(`企业“${name}”已创建`);
+    }
+
     async function onDraftCompanyChange() {
       const selectedCompany = document.getElementById("draftCompanySelect")?.value || "";
       await refreshDraftPickers(selectedCompany, "");
@@ -957,12 +1004,6 @@
 
     function getCurrentCompanyName() {
       return String(document.getElementById("company_name")?.value || "").trim();
-    }
-
-    function getWorkingCompanyKey() {
-      const current = getCurrentCompanyName();
-      if (current) return current;
-      return ReportDraftLibrary.DEFAULT_UNNAMED_COMPANY;
     }
 
     function getCompanyDisplayName(companyName) {
@@ -2344,13 +2385,15 @@
 
       const selectedCompany = document.getElementById("draftCompanySelect")?.value || "";
       const selectedEntry = parseDraftEntryValue(document.getElementById("draftVersionSelect")?.value || "");
-      let targetCompany = getWorkingCompanyKey();
+      let targetCompany = selectedCompany;
       let targetEntry = { kind: "working", versionNo: 0 };
 
-      if (!isAuto && selectedCompany) {
-        targetCompany = selectedCompany;
+      if (!targetCompany) {
+        if (isAuto) return true;
+        setStatus("请先新建并选择企业，再保存草稿", "error");
+        return false;
       }
-      if (!isAuto && selectedEntry) {
+      if (selectedEntry) {
         targetEntry = selectedEntry;
       }
 
@@ -2388,20 +2431,19 @@
         setStatus("草稿库未初始化，无法保留版本", "error");
         return;
       }
-      const companyName = getCurrentCompanyName();
+      const companyName = document.getElementById("draftCompanySelect")?.value || "";
       if (!companyName) {
-        setStatus("请先填写企业名称，再保留版本", "error");
+        setStatus("请先新建并选择企业，再保存版本", "error");
         return;
       }
-      const companyDrafts = await draftLibrary.listCompanyDrafts(companyName);
-      const existingVersions = companyDrafts
-        .filter((item) => item.kind === "version")
-        .map((item) => Number(item.versionNo || 0));
-      const versionNo = existingVersions.length ? Math.max(...existingVersions) + 1 : 1;
-      if (versionNo > 10) {
-        setStatus("单个企业最多保留 10 个版本，请先删除旧版本", "error");
+      const versionNo = Number(document.getElementById("draftTargetVersionNo")?.value || "0");
+      if (!Number.isInteger(versionNo) || versionNo < 1 || versionNo > 10) {
+        setStatus("请选择 1 到 10 的版本号", "error");
         return;
       }
+      const existing = await draftLibrary.getDraft(companyName, "version", versionNo);
+      if (existing && !window.confirm(`第${versionNo}版已存在，是否覆盖？`)) return;
+
       const snapshot = buildDraftSnapshot(false);
       snapshot.saved_mode = "version";
       snapshot.saved_version_no = versionNo;
@@ -2526,15 +2568,20 @@
         setStatus("草稿库未初始化，无法清空草稿", "error");
         return;
       }
+      const companyName = document.getElementById("draftCompanySelect")?.value || "";
+      if (!companyName) {
+        setStatus("请先选择企业，再清空工作草稿", "error");
+        return;
+      }
       try {
-        await draftLibrary.clearWorkingDraft(getWorkingCompanyKey());
+        await draftLibrary.clearWorkingDraft(companyName);
       } catch (err) {
         setStatus(`清空草稿失败：${err.message || "IndexedDB 删除失败"}`, "error");
         return;
       }
       lastSavedSnapshotText = "";
       resetFormToBlank();
-      await refreshDraftPickers("", "");
+      await refreshDraftPickers(companyName, "");
       updateDraftMeta("当前公司工作草稿已清空");
       setStatus("已清空当前公司工作草稿，版本草稿保留");
     }
@@ -2546,7 +2593,8 @@
         if (target.matches("input, textarea, select")) {
           if (target.matches("#company_name, .c-name")) {
             resetOtherCompanyLookupState();
-            refreshDraftPickers(getCurrentCompanyName(), "").catch(() => {});
+            const selectedCompany = document.getElementById("draftCompanySelect")?.value || "";
+            refreshDraftPickers(selectedCompany, "").catch(() => {});
           }
           if (target.matches("#company_name, #sale_23, #sale_24, #sale_25, #pct_23, #pct_24, #pct_25, #total_mkt_23, #total_mkt_24, #total_mkt_25")) {
             refreshCompetitorBoard();
@@ -2562,7 +2610,8 @@
         if (target.matches("input, textarea, select")) {
           if (target.matches("#company_name, .c-name")) {
             resetOtherCompanyLookupState();
-            refreshDraftPickers(getCurrentCompanyName(), "").catch(() => {});
+            const selectedCompany = document.getElementById("draftCompanySelect")?.value || "";
+            refreshDraftPickers(selectedCompany, "").catch(() => {});
           }
           if (target.matches("#company_name, #sale_23, #sale_24, #sale_25, #pct_23, #pct_24, #pct_25, #total_mkt_23, #total_mkt_24, #total_mkt_25")) {
             refreshCompetitorBoard();
@@ -2582,6 +2631,7 @@
     }
 
     async function bootApp() {
+      initTargetVersionOptions();
       initDates();
       document.getElementById("template_type").addEventListener("change", toggleTemplateMode);
       addSource();
