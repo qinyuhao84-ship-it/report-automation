@@ -84,7 +84,15 @@ def _competitor_penalty(input_model: InferenceInput) -> float:
 def _base_share_guess(input_model: InferenceInput, threshold: float) -> float:
     guess = threshold
     guess -= _competitor_penalty(input_model)
-    text = " ".join([input_model.product_name, input_model.product_category, input_model.product_intro, input_model.company_intro]).lower()
+    text = " ".join(
+        [
+            input_model.product_name,
+            input_model.product_code,
+            input_model.product_category,
+            input_model.product_intro,
+            input_model.company_intro,
+        ]
+    ).lower()
     if any(k in text for k in ["龙头", "leading", "leader"]):
         guess += 0.02
     if any(k in text for k in ["niche", "细分", "专精"]):
@@ -102,7 +110,8 @@ def _evidence_support(evidence_chain: Iterable[EvidenceRecord]) -> Tuple[Optiona
             market_sizes.append(float(item.extracted_market_size))
         if item.extracted_ratio is not None and item.extracted_ratio > 0:
             ratios.append(float(item.extracted_ratio))
-    return (market_sizes[-1] if market_sizes else None, ratios[-1] if ratios else None)
+    # 按业务要求优先采用“同类中更小的市场规模”，用于后续继续细分。
+    return (min(market_sizes) if market_sizes else None, ratios[-1] if ratios else None)
 
 
 def _build_market_path(input_model: InferenceInput, current_path: Sequence[str], method: EstimationMethod) -> List[str]:

@@ -45,6 +45,7 @@ def score_evidence(input_model: InferenceInput, evidence: EvidenceRecord, round_
             [
                 input_model.company_name,
                 input_model.product_name,
+                input_model.product_code,
                 input_model.product_category,
                 input_model.product_intro,
                 input_model.company_intro,
@@ -103,4 +104,3 @@ def attempt_action_for_score(score: float, has_results: bool) -> str:
     if score >= 0.45:
         return "expand"
     return "explore"
-

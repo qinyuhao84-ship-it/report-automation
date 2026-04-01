@@ -715,7 +715,14 @@
             <button class="btn subtle" type="button" onclick="addCompetitorRow()">添加一行企业</button>
           </div>
           <table id="comp_table" style="margin-top:6px;">
-            <thead><tr><th>对手名称</th><th>2023占有率</th><th>2024占有率</th><th>2025占有率</th></tr></thead>
+            <thead>
+              <tr>
+                <th>对手名称</th>
+                <th>2023销售额(万元)</th><th>2023占有率</th>
+                <th>2024销售额(万元)</th><th>2024占有率</th>
+                <th>2025销售额(万元)</th><th>2025占有率</th>
+              </tr>
+            </thead>
             <tbody id="competitorBody"></tbody>
           </table>
           <div class="section-note">竞争对手信息与数据来源分开维护，避免混淆。</div>
@@ -852,6 +859,9 @@
       const m = document.getElementById("month");
       const d = document.getElementById("day");
       const now = new Date();
+      y.innerHTML = "";
+      m.innerHTML = "";
+      d.innerHTML = "";
 
       for (let i = 2020; i <= 2035; i++) y.add(new Option(i, i));
       for (let i = 1; i <= 12; i++) m.add(new Option(i, i));
@@ -872,6 +882,88 @@
       } else {
         pctEl.value = "";
       }
+      syncAllCompetitorRowsByYear(year);
+      updateProgress();
+    }
+
+    function parsePercentRatio(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return null;
+      const cleaned = text.replace(/,/g, "").replace(/%/g, "").trim();
+      const n = Number(cleaned);
+      if (!Number.isFinite(n)) return null;
+      if (text.includes("%")) return n / 100;
+      if (n >= 0 && n <= 1) return n;
+      return n / 100;
+    }
+
+    function setCompetitorPctFromSale(row, year) {
+      const saleInput = row.querySelector(`.c-s${year}`);
+      const pctInput = row.querySelector(`.c-p${year}`);
+      const sale = safeNum(saleInput?.value);
+      const market = safeNum(document.getElementById(`total_mkt_${year}`)?.value);
+      if (sale === null) {
+        if (pctInput) pctInput.value = "";
+        return;
+      }
+      if (!(market !== null && market > 0)) {
+        if (pctInput) pctInput.value = "";
+        return;
+      }
+      if (pctInput) pctInput.value = ((sale / market) * 100).toFixed(2) + "%";
+    }
+
+    function setCompetitorSaleFromPct(row, year) {
+      const saleInput = row.querySelector(`.c-s${year}`);
+      const pctInput = row.querySelector(`.c-p${year}`);
+      const ratio = parsePercentRatio(pctInput?.value);
+      const market = safeNum(document.getElementById(`total_mkt_${year}`)?.value);
+      if (ratio === null) {
+        if (saleInput) saleInput.value = "";
+        return;
+      }
+      if (!(market !== null && market > 0)) {
+        if (saleInput) saleInput.value = "";
+        return;
+      }
+      if (saleInput) saleInput.value = (market * ratio).toFixed(2);
+    }
+
+    function syncCompetitorRowByPreference(row, year) {
+      const mode = row.dataset[`pref${year}`];
+      const saleInput = row.querySelector(`.c-s${year}`);
+      const pctInput = row.querySelector(`.c-p${year}`);
+      const hasSale = !!String(saleInput?.value || "").trim();
+      const hasPct = !!String(pctInput?.value || "").trim();
+      if (mode === "sale") {
+        setCompetitorPctFromSale(row, year);
+        return;
+      }
+      if (mode === "pct") {
+        setCompetitorSaleFromPct(row, year);
+        return;
+      }
+      if (hasSale) {
+        setCompetitorPctFromSale(row, year);
+        return;
+      }
+      if (hasPct) {
+        setCompetitorSaleFromPct(row, year);
+      }
+    }
+
+    function syncAllCompetitorRowsByYear(year) {
+      document.querySelectorAll("#comp_table tbody tr").forEach((row) => {
+        syncCompetitorRowByPreference(row, year);
+      });
+    }
+
+    function competitorInputChanged(input, year, mode) {
+      const row = input.closest("tr");
+      if (!row) return;
+      row.dataset[`pref${year}`] = mode;
+      syncCompetitorRowByPreference(row, year);
+      scheduleAutoSave();
       updateProgress();
     }
 
@@ -910,16 +1002,20 @@
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td><input class="c-name" value="${prefill?.name || ""}"></td>
-        <td><input class="c-p23" value="${prefill?.p23 || ""}"></td>
-        <td><input class="c-p24" value="${prefill?.p24 || ""}"></td>
+        <td><input class="c-s23" value="${prefill?.sale_23 || prefill?.s23 || ""}" oninput="competitorInputChanged(this, '23', 'sale')" /></td>
+        <td><input class="c-p23" value="${prefill?.p23 || ""}" oninput="competitorInputChanged(this, '23', 'pct')" /></td>
+        <td><input class="c-s24" value="${prefill?.sale_24 || prefill?.s24 || ""}" oninput="competitorInputChanged(this, '24', 'sale')" /></td>
+        <td><input class="c-p24" value="${prefill?.p24 || ""}" oninput="competitorInputChanged(this, '24', 'pct')" /></td>
+        <td><input class="c-s25" value="${prefill?.sale_25 || prefill?.s25 || ""}" oninput="competitorInputChanged(this, '25', 'sale')" /></td>
         <td>
           <div style="display:flex;gap:6px;align-items:center;">
-            <input class="c-p25" value="${prefill?.p25 || ""}">
+            <input class="c-p25" value="${prefill?.p25 || ""}" oninput="competitorInputChanged(this, '25', 'pct')" />
             <button class="source-del" type="button" style="position:static;flex:0 0 auto;" onclick="removeCompetitorRow(this)">×</button>
           </div>
         </td>
       `;
       document.getElementById("competitorBody").appendChild(tr);
+      ["23", "24", "25"].forEach((year) => syncCompetitorRowByPreference(tr, year));
     }
 
     function removeCompetitorRow(button) {
@@ -994,8 +1090,11 @@
       document.querySelectorAll("#comp_table tbody tr").forEach((tr) => {
         rows.push({
           name: tr.querySelector(".c-name").value,
+          sale_23: tr.querySelector(".c-s23").value,
           p23: tr.querySelector(".c-p23").value,
+          sale_24: tr.querySelector(".c-s24").value,
           p24: tr.querySelector(".c-p24").value,
+          sale_25: tr.querySelector(".c-s25").value,
           p25: tr.querySelector(".c-p25").value,
         });
       });
@@ -1815,6 +1914,9 @@
     function saveDraft(isAuto = false) {
       const manualProfiles = collectManualCompanyProfiles(false).profiles;
       const snapshot = {
+        saved_ts: Date.now(),
+        saved_at: new Date().toISOString(),
+        saved_mode: isAuto ? "auto" : "manual",
         province: document.getElementById("province").value,
         company_name: document.getElementById("company_name").value,
         product_name: document.getElementById("product_name").value,
@@ -1854,27 +1956,69 @@
         other_pending_companies: otherProofPendingCompanies,
       };
       otherProofResolvedProfiles = manualProfiles;
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(snapshot));
-      if (!isAuto) {
-        localStorage.setItem(MANUAL_DRAFT_KEY, JSON.stringify(snapshot));
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(snapshot));
+        if (!isAuto) {
+          localStorage.setItem(MANUAL_DRAFT_KEY, JSON.stringify(snapshot));
+        }
+      } catch (_e) {
+        updateDraftMeta("草稿保存失败");
+        setStatus("草稿保存失败：浏览器本地存储不可用", "error");
+        return false;
       }
       const now = new Date();
       const stamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
       updateDraftMeta(`${isAuto ? "自动保存" : "手动保存"} ${stamp}`);
       updateProgress();
+      return true;
     }
 
     function loadDraft(silent = false, preferManual = true) {
       const manualRaw = localStorage.getItem(MANUAL_DRAFT_KEY);
       const autoRaw = localStorage.getItem(DRAFT_KEY);
-      const raw = preferManual ? (manualRaw || autoRaw) : (autoRaw || manualRaw);
-      if (!raw) {
+      const parseDraft = (raw) => {
+        if (!raw) return null;
+        try {
+          const payload = JSON.parse(raw);
+          if (!payload || typeof payload !== "object") return null;
+          return payload;
+        } catch (_e) {
+          return null;
+        }
+      };
+      const manualDraft = parseDraft(manualRaw);
+      const autoDraft = parseDraft(autoRaw);
+      if (!manualDraft && !autoDraft) {
         if (!silent) setStatus("没有可恢复的草稿", "error");
         return;
       }
-      try {
-        const d = JSON.parse(raw);
 
+      let sourceType = "auto";
+      let d = autoDraft || manualDraft;
+      if (manualDraft && autoDraft) {
+        const manualTs = Number(manualDraft.saved_ts || 0);
+        const autoTs = Number(autoDraft.saved_ts || 0);
+        if (manualTs && autoTs) {
+          if (manualTs >= autoTs) {
+            d = manualDraft;
+            sourceType = "manual";
+          } else {
+            d = autoDraft;
+            sourceType = "auto";
+          }
+        } else if (preferManual) {
+          d = manualDraft;
+          sourceType = "manual";
+        } else {
+          d = autoDraft;
+          sourceType = "auto";
+        }
+      } else if (manualDraft) {
+        d = manualDraft;
+        sourceType = "manual";
+      }
+
+      try {
         [
           "province", "company_name", "product_name", "product_code", "year", "month", "day",
           "company_intro", "product_intro", "report_body", "target_scope", "template_type", "proof_scope", "market_name",
@@ -1916,24 +2060,81 @@
 
         ["23", "24", "25"].forEach(calcMyPct);
         updateProgress();
-        updateDraftMeta(raw === manualRaw ? "手动草稿已恢复" : "自动草稿已恢复");
-        if (!silent) setStatus("草稿恢复成功");
+        updateDraftMeta(sourceType === "manual" ? "手动草稿已恢复" : "自动草稿已恢复");
+        if (lastInferenceTaskId) {
+          setInferenceControls(true);
+          clearInferencePoll();
+          pollInferenceTask(lastInferenceTaskId);
+          if (!silent) {
+            setStatus(`草稿恢复成功，继续同步任务 ${lastInferenceTaskId}`);
+          }
+        } else {
+          setInferenceControls(false);
+          if (!silent) setStatus("草稿恢复成功");
+        }
       } catch (_e) {
         if (!silent) setStatus("草稿格式异常，恢复失败", "error");
       }
     }
 
-    function clearDraft() {
-      localStorage.removeItem(DRAFT_KEY);
-      localStorage.removeItem(MANUAL_DRAFT_KEY);
+    function resetFormToBlank() {
+      clearInferencePoll();
       lastInferenceTaskId = null;
       otherProofChapter1Sections = [];
       otherProofResolvedProfiles = [];
       otherProofPendingCompanies = [];
+
+      const emptyFields = [
+        "province", "company_name", "product_name", "product_code",
+        "company_intro", "product_intro", "report_body", "proof_scope", "market_name",
+        "sale_23", "total_mkt_23", "pct_23", "rank_23",
+        "sale_24", "total_mkt_24", "pct_24", "rank_24",
+        "sale_25", "total_mkt_25", "pct_25", "rank_25",
+      ];
+      emptyFields.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+      });
+
+      document.getElementById("target_scope").value = "CN";
+      document.getElementById("template_type").value = "self";
+      initDates();
+
+      const competitorBody = document.getElementById("competitorBody");
+      competitorBody.innerHTML = "";
+      addCompetitorRow();
+
+      const sourceHolder = document.getElementById("sources_list");
+      sourceHolder.innerHTML = "";
+      sourceCount = 0;
+      addSource();
+
+      const otherLayerHolder = document.getElementById("otherLayerList");
+      otherLayerHolder.innerHTML = "";
+      addOtherLayer();
+
+      document.getElementById("infStatus").textContent = "未执行";
+      document.getElementById("infScore").textContent = "-";
+      document.getElementById("infShare").textContent = "-";
+      document.getElementById("infDepth").textContent = "-";
+      document.getElementById("infPath").textContent = "细分路径：尚未生成";
+      document.getElementById("attemptBody").innerHTML = '<tr><td colspan="4" class="empty">暂无执行日志</td></tr>';
+      document.getElementById("evidenceBody").innerHTML = '<tr><td colspan="6" class="empty">暂无证据条目</td></tr>';
+      document.getElementById("calcBody").innerHTML = '<tr><td colspan="2" class="empty">暂无测算过程</td></tr>';
+
       renderCompanyConfirmPanel();
       updateChapter1State("第一章：尚未生成");
+      toggleTemplateMode();
+      setInferenceControls(false);
+      updateProgress();
+    }
+
+    function clearDraft() {
+      localStorage.removeItem(DRAFT_KEY);
+      localStorage.removeItem(MANUAL_DRAFT_KEY);
+      resetFormToBlank();
       updateDraftMeta("草稿已清空");
-      setStatus("草稿已清空");
+      setStatus("草稿已清空，页面已重置");
     }
 
     function bindAutoSave() {

@@ -27,6 +27,11 @@ class FakeProvider:
         return outcome
 
 
+class NoLlmOrchestrator:
+    def is_available(self):
+        return False
+
+
 def build_input() -> InferenceInput:
     return InferenceInput(
         company_name="Demo Co",
@@ -48,38 +53,50 @@ def make_hit(provider: str, ratio: float, market_size: float) -> ProviderHit:
         query="demo query",
         title="demo title",
         url=f"https://example.com/{provider}",
-        snippet="demo snippet",
+        snippet="2025年市场规模约1000万元，市场占有率约15%",
         captured_at=datetime.utcnow(),
         extracted_year=2025,
         extracted_market_size=market_size,
         extracted_ratio=ratio,
         confidence=0.9,
         market_path=["CN", "工业设备"],
+        source_verified=True,
+        quote_text="2025年市场规模约1000万元，市场占有率约15%",
     )
 
 
-def test_engine_reaches_target_and_stops_early():
-    config = InferenceConfig(target_share_threshold=0.10, max_search_rounds=3, evidence_min_sources=1)
+def test_engine_reaches_target_after_exhaustive_search():
+    config = InferenceConfig(
+        target_share_threshold=0.10,
+        max_search_rounds=3,
+        evidence_min_sources=1,
+        market_fit_required=False,
+    )
     p1 = FakeProvider("mitata", [[make_hit("mitata", ratio=0.18, market_size=830.0)]])
     p2 = FakeProvider("doubao", [[make_hit("doubao", ratio=0.08, market_size=2000.0)]])
 
-    engine = MarketInferenceEngine(config=config, providers=[p1, p2])
+    engine = MarketInferenceEngine(config=config, providers=[p1, p2], llm_orchestrator=NoLlmOrchestrator())
     result = engine.run("task-1", build_input())
 
     assert result.status == TaskStatus.REACHED
     assert result.reached_target is True
     assert result.market_share_latest_year is not None
     assert result.market_share_latest_year >= 0.10
-    assert p1.calls == 1
-    assert p2.calls == 0
+    assert p1.calls >= 1
+    assert p2.calls >= 1
     assert any(item.action == SearchAction.STOP for item in result.attempt_log)
 
 
 def test_engine_not_reached_after_max_rounds():
-    config = InferenceConfig(target_share_threshold=0.30, max_search_rounds=2, evidence_min_sources=1)
+    config = InferenceConfig(
+        target_share_threshold=0.30,
+        max_search_rounds=2,
+        evidence_min_sources=1,
+        market_fit_required=False,
+    )
     p1 = FakeProvider("mitata", [[make_hit("mitata", ratio=0.03, market_size=5000.0)]])
 
-    engine = MarketInferenceEngine(config=config, providers=[p1])
+    engine = MarketInferenceEngine(config=config, providers=[p1], llm_orchestrator=NoLlmOrchestrator())
     result = engine.run("task-2", build_input())
 
     assert result.status == TaskStatus.NOT_REACHED
@@ -90,11 +107,16 @@ def test_engine_not_reached_after_max_rounds():
 
 
 def test_engine_fallback_when_all_channels_fail():
-    config = InferenceConfig(target_share_threshold=0.20, max_search_rounds=1, evidence_min_sources=1)
+    config = InferenceConfig(
+        target_share_threshold=0.20,
+        max_search_rounds=1,
+        evidence_min_sources=1,
+        market_fit_required=False,
+    )
     p1 = FakeProvider("mitata", [RuntimeError("m1 down")])
     p2 = FakeProvider("doubao", [RuntimeError("m2 down")])
 
-    engine = MarketInferenceEngine(config=config, providers=[p1, p2])
+    engine = MarketInferenceEngine(config=config, providers=[p1, p2], llm_orchestrator=NoLlmOrchestrator())
     result = engine.run("task-3", build_input())
 
     assert result.status == TaskStatus.NOT_REACHED
@@ -103,16 +125,34 @@ def test_engine_fallback_when_all_channels_fail():
 
 
 def test_engine_degrades_to_next_channel_after_failure():
-    config = InferenceConfig(target_share_threshold=0.10, max_search_rounds=2, evidence_min_sources=1)
+    config = InferenceConfig(
+        target_share_threshold=0.10,
+        max_search_rounds=2,
+        evidence_min_sources=1,
+        market_fit_required=False,
+    )
     p1 = FakeProvider("mitata", [RuntimeError("temporary outage")])
     p2 = FakeProvider("doubao", [[make_hit("doubao", ratio=0.15, market_size=1000.0)]])
 
-    engine = MarketInferenceEngine(config=config, providers=[p1, p2])
+    engine = MarketInferenceEngine(config=config, providers=[p1, p2], llm_orchestrator=NoLlmOrchestrator())
     result = engine.run("task-4", build_input())
 
     assert result.status == TaskStatus.REACHED
-    assert p1.calls == 1
-    assert p2.calls == 1
+    assert p1.calls >= 1
+    assert p2.calls >= 1
     assert result.final_market_path
     assert any(item.provider == "mitata" and item.action == SearchAction.SKIP for item in result.attempt_log)
     assert any(item.provider == "doubao" and item.action == SearchAction.EXPLORE for item in result.attempt_log)
+
+
+def test_engine_allows_reached_when_market_fit_is_required_but_llm_unavailable():
+    config = InferenceConfig(target_share_threshold=0.10, max_search_rounds=1, evidence_min_sources=1, market_fit_required=True)
+    p1 = FakeProvider("mitata", [[make_hit("mitata", ratio=0.18, market_size=830.0)]])
+
+    engine = MarketInferenceEngine(config=config, providers=[p1], llm_orchestrator=NoLlmOrchestrator())
+    result = engine.run("task-fit-required", build_input())
+
+    assert result.status == TaskStatus.REACHED
+    assert result.reached_target is True
+    assert result.market_fit_passed is True
+    assert result.market_fit_reason and "宽松策略暂时通过" in result.market_fit_reason

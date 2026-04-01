@@ -49,7 +49,16 @@ class ConfigStore:
         with self._lock:
             current = _model_dump(self._config)
             updates = _model_dump(patch)
-            updates = {k: v for k, v in updates.items() if v is not None}
+            explicit_fields = set()
+            if hasattr(patch, "model_fields_set"):
+                explicit_fields = set(getattr(patch, "model_fields_set") or set())
+            elif hasattr(patch, "__fields_set__"):
+                explicit_fields = set(getattr(patch, "__fields_set__") or set())
+
+            if explicit_fields:
+                updates = {k: updates.get(k) for k in explicit_fields}
+            else:
+                updates = {k: v for k, v in updates.items() if v is not None}
             current.update(updates)
             self._config = _model_validate(InferenceConfig, current)
             self._write(self._config)

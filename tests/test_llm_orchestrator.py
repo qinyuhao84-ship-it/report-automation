@@ -38,6 +38,27 @@ class MockTransport:
                     }
                 ]
             }
+        elif "PATH_PROPOSAL" in prompt:
+            payload = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "market_paths": [
+                                        ["中国", "纸袋机", "全自动纸袋机", "可调式舌口全自动纸袋机"],
+                                        ["中国", "包装设备", "纸袋设备", "全自动纸袋机"],
+                                        ["全球", "纸袋机", "工业包装机械"],
+                                    ],
+                                    "confidence": 0.88,
+                                    "reason": "优先给出可检索到公开市场规模的多维细分链",
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            }
         else:
             payload = {
                 "choices": [
@@ -46,6 +67,10 @@ class MockTransport:
                             "content": json.dumps(
                                 {
                                     "query": "纸袋机 全自动 2025 市场规模",
+                                    "provider_queries": {
+                                        "mitata": "秘塔：纸袋机 全自动 2025 市场规模",
+                                        "yuanbao": "元宝：纸袋机 全自动 2025 市场规模"
+                                    },
                                     "market_path": ["中国", "纸袋机", "全自动纸袋机"],
                                     "next_paths": [
                                         ["中国", "纸袋机", "全自动纸袋机"],
@@ -69,6 +94,7 @@ def sample_input() -> InferenceInput:
     return InferenceInput(
         company_name="Demo Co",
         product_name="Demo Product",
+        product_code="3907039900",
         product_intro="企业产品介绍",
         product_category="工业设备",
         company_intro="企业介绍",
@@ -120,6 +146,16 @@ def test_llm_orchestrator_plan_and_extract(sample_input):
     )
     orchestrator = LLMOrchestrator(client=client)
 
+    proposal = orchestrator.propose_market_paths(
+        input_model=sample_input,
+        latest_year=2025,
+        max_paths=8,
+    )
+
+    assert proposal is not None
+    assert len(proposal.market_paths) >= 2
+    assert proposal.market_paths[0][-1] == "可调式舌口全自动纸袋机"
+
     plan = orchestrator.plan_round(
         input_model=sample_input,
         current_path=["中国", "纸袋机"],
@@ -131,6 +167,7 @@ def test_llm_orchestrator_plan_and_extract(sample_input):
 
     assert plan is not None
     assert plan.query == "纸袋机 全自动 2025 市场规模"
+    assert plan.provider_queries.get("mitata", "").startswith("秘塔")
     assert plan.market_path[-1] == "全自动纸袋机"
     assert plan.next_paths
 

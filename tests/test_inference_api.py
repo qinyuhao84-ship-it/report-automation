@@ -41,6 +41,55 @@ class FakeEngine:
         )
 
 
+class CancellableEngine:
+    def __init__(self, config) -> None:
+        self.config = config
+
+    def run(self, task_id: str, payload: InferenceInput, should_stop=None) -> TaskResult:
+        now = datetime.utcnow()
+        for _ in range(80):
+            if callable(should_stop) and should_stop():
+                return TaskResult(
+                    task_id=task_id,
+                    status=TaskStatus.CANCELLED,
+                    started_at=now,
+                    finished_at=datetime.utcnow(),
+                    input=payload,
+                    target_scope=payload.market_scope,
+                    latest_year=payload.latest_sales_year,
+                    target_share_threshold=self.config.target_share_threshold,
+                    final_market_path=[],
+                    market_size_latest_year_wan_cny=None,
+                    market_share_latest_year=None,
+                    reached_target=False,
+                    evidence_score=0.0,
+                    evidence_chain=[],
+                    attempt_log=[],
+                    assumption_notes=["收到停止请求，已中断"],
+                    error_message=None,
+                )
+            time.sleep(0.03)
+        return TaskResult(
+            task_id=task_id,
+            status=TaskStatus.NOT_REACHED,
+            started_at=now,
+            finished_at=datetime.utcnow(),
+            input=payload,
+            target_scope=payload.market_scope,
+            latest_year=payload.latest_sales_year,
+            target_share_threshold=self.config.target_share_threshold,
+            final_market_path=[],
+            market_size_latest_year_wan_cny=None,
+            market_share_latest_year=None,
+            reached_target=False,
+            evidence_score=0.0,
+            evidence_chain=[],
+            attempt_log=[],
+            assumption_notes=["未达标"],
+            error_message=None,
+        )
+
+
 @pytest.fixture()
 def client_with_fake_manager(tmp_path: Path):
     config_store = ConfigStore(path=str(tmp_path / "config.json"))
@@ -55,6 +104,27 @@ def client_with_fake_manager(tmp_path: Path):
     original = app_module.inference_task_manager
     app_module.inference_task_manager = manager
 
+    client = TestClient(app_module.app)
+    try:
+        yield client
+    finally:
+        app_module.inference_task_manager = original
+        manager.shutdown()
+
+
+@pytest.fixture()
+def client_with_cancellable_manager(tmp_path: Path):
+    config_store = ConfigStore(path=str(tmp_path / "config.json"))
+    task_store = TaskStore(base_dir=str(tmp_path / "tasks"))
+    manager = InferenceTaskManager(
+        config_store=config_store,
+        task_store=task_store,
+        engine_factory=lambda cfg: CancellableEngine(cfg),
+        max_workers=1,
+    )
+
+    original = app_module.inference_task_manager
+    app_module.inference_task_manager = manager
     client = TestClient(app_module.app)
     try:
         yield client
@@ -85,7 +155,7 @@ def _poll_result(client: TestClient, task_id: str, timeout_sec: float = 2.0):
         resp = client.get(f"/infer-market-share/{task_id}")
         assert resp.status_code == 200
         last = resp.json()
-        if last["status"] in {"REACHED", "NOT_REACHED", "FAILED"}:
+        if last["status"] in {"REACHED", "NOT_REACHED", "CANCELLED", "FAILED"}:
             return last
         time.sleep(0.05)
     return last
@@ -137,3 +207,28 @@ def test_config_priority_order_persists(client_with_fake_manager: TestClient):
     data = update_resp.json()
     assert data["provider_priority"] == ["doubao", "yuanbao", "mitata"]
     assert data["estimation_priority"] == ["cagr_projection", "share_x_parent", "analogous_benchmark"]
+
+
+def test_config_allows_null_runtime_limit(client_with_fake_manager: TestClient):
+    update_resp = client_with_fake_manager.put(
+        "/infer-config",
+        json={"max_runtime_seconds": None},
+    )
+    assert update_resp.status_code == 200
+    data = update_resp.json()
+    assert data["max_runtime_seconds"] is None
+
+
+def test_cancel_endpoint_interrupts_task(client_with_cancellable_manager: TestClient):
+    submit_resp = client_with_cancellable_manager.post("/infer-market-share", json=payload())
+    assert submit_resp.status_code == 202
+    task_id = submit_resp.json()["task_id"]
+
+    cancel_resp = client_with_cancellable_manager.post(f"/infer-market-share/{task_id}/cancel")
+    assert cancel_resp.status_code == 200
+    cancel_body = cancel_resp.json()
+    assert cancel_body["accepted"] is True
+
+    result = _poll_result(client_with_cancellable_manager, task_id, timeout_sec=4.0)
+    assert result is not None
+    assert result["status"] == "CANCELLED"
