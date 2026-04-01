@@ -2342,8 +2342,32 @@
         return true;
       }
 
+      const selectedCompany = document.getElementById("draftCompanySelect")?.value || "";
+      const selectedEntry = parseDraftEntryValue(document.getElementById("draftVersionSelect")?.value || "");
+      let targetCompany = getWorkingCompanyKey();
+      let targetEntry = { kind: "working", versionNo: 0 };
+
+      if (!isAuto && selectedCompany) {
+        targetCompany = selectedCompany;
+      }
+      if (!isAuto && selectedEntry) {
+        targetEntry = selectedEntry;
+      }
+
+      if (!isAuto && targetCompany && targetCompany !== ReportDraftLibrary.DEFAULT_UNNAMED_COMPANY) {
+        const currentCompany = getCurrentCompanyName();
+        if (currentCompany && currentCompany !== targetCompany) {
+          setStatus("当前表单企业与顶部选择企业不一致，请先统一后再保存", "error");
+          return false;
+        }
+      }
+
       try {
-        await draftLibrary.saveWorkingDraft(getWorkingCompanyKey(), snapshot, Number(snapshot.saved_ts) || Date.now());
+        if (targetEntry.kind === "version") {
+          await draftLibrary.saveVersionDraft(targetCompany, targetEntry.versionNo, snapshot, Number(snapshot.saved_ts) || Date.now());
+        } else {
+          await draftLibrary.saveWorkingDraft(targetCompany, snapshot, Number(snapshot.saved_ts) || Date.now());
+        }
       } catch (err) {
         updateDraftMeta("草稿保存失败");
         setStatus(`草稿保存失败：${err.message || "IndexedDB 写入失败"}`, "error");
@@ -2354,7 +2378,7 @@
       const now = new Date();
       const stamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
       updateDraftMeta(`${isAuto ? "自动保存" : "手动保存"} ${stamp}`);
-      await refreshDraftPickers(getWorkingCompanyKey(), "working:0");
+      await refreshDraftPickers(targetCompany, `${targetEntry.kind}:${targetEntry.versionNo || 0}`);
       updateProgress();
       return true;
     }
