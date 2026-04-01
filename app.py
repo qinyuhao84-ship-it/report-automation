@@ -494,5 +494,14 @@ def index():
         raise HTTPException(status_code=500, detail="前端模板加载失败")
     return HTMLResponse(content=html)
 
+
+@app.get("/frontend/{file_path:path}")
+def frontend_assets(file_path: str):
+    frontend_dir = (Path(__file__).parent / "frontend").resolve()
+    target = (frontend_dir / file_path).resolve()
+    if not str(target).startswith(str(frontend_dir)) or not target.is_file():
+        raise HTTPException(status_code=404, detail="资源不存在")
+    return FileResponse(target)
+
 if __name__ == "__main__":
     uvicorn.run("app:app", host="127.0.0.1", port=8000)

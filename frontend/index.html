@@ -512,6 +512,87 @@
       color: #cdeee3;
       opacity: 0.95;
       text-align: right;
+      min-width: 170px;
+    }
+
+    .draft-version {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #d6f5ec;
+      font-size: 12px;
+    }
+
+    .draft-version select {
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      background: rgba(255, 255, 255, 0.2);
+      color: #f7fffc;
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+      outline: none;
+    }
+
+    .draft-version select option {
+      color: #17382f;
+    }
+
+    .draft-modal-mask {
+      position: fixed;
+      inset: 0;
+      background: rgba(9, 36, 29, 0.46);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 40;
+      padding: 16px;
+    }
+
+    .draft-modal-mask.show {
+      display: flex;
+    }
+
+    .draft-modal {
+      width: min(720px, 100%);
+      background: #fff;
+      border-radius: 14px;
+      border: 1px solid #d6e3dd;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      color: var(--ink);
+    }
+
+    .draft-modal h4 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .draft-modal-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      margin-bottom: 12px;
+    }
+
+    .draft-modal-grid .field {
+      margin-bottom: 0;
+    }
+
+    .draft-modal-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .draft-modal-list {
+      margin: 8px 0 10px;
+      border: 1px solid #dce8e3;
+      border-radius: 10px;
+      background: #f7fbf9;
+      padding: 10px;
+      font-size: 12px;
+      color: #2f5649;
     }
 
     .section-note {
@@ -559,6 +640,11 @@
       </div>
       <div class="top-actions">
         <button class="btn subtle" type="button" onclick="saveDraft()">保存草稿</button>
+        <div class="draft-version">
+          <label for="draftVersionNo">版本</label>
+          <select id="draftVersionNo"></select>
+          <button class="btn subtle" type="button" onclick="saveDraftVersion()">保留为该版本</button>
+        </div>
         <button class="btn subtle" type="button" onclick="loadDraft()">恢复草稿</button>
         <button class="btn subtle" type="button" onclick="clearDraft()">清空草稿</button>
         <div id="draftMeta" class="draft-tip">草稿未保存</div>
@@ -801,13 +887,39 @@
     </div>
   </div>
 
+  <div id="draftRestoreModal" class="draft-modal-mask" role="dialog" aria-modal="true" aria-labelledby="draftRestoreTitle">
+    <div class="draft-modal">
+      <h4 id="draftRestoreTitle">恢复草稿</h4>
+      <div class="draft-modal-grid">
+        <div class="field">
+          <label>企业</label>
+          <select id="restoreCompanySelect" onchange="refreshRestoreEntryOptions()"></select>
+        </div>
+        <div class="field">
+          <label>草稿</label>
+          <select id="restoreEntrySelect" onchange="updateRestoreDeleteButtonState()"></select>
+        </div>
+      </div>
+      <div id="restoreDraftInfo" class="draft-modal-list">请选择企业和草稿版本。</div>
+      <div class="draft-modal-actions">
+        <button class="btn subtle" type="button" onclick="closeDraftRestoreModal()">关闭</button>
+        <button class="btn danger" type="button" onclick="deleteSelectedVersion()" id="deleteSelectedVersionBtn">删除该版本</button>
+        <button class="btn danger" type="button" onclick="deleteSelectedCompany()">删除整家公司</button>
+        <button class="btn accent" type="button" onclick="restoreSelectedDraft()">恢复所选草稿</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/frontend/draft_library.js"></script>
   <script>
-    const DRAFT_KEY = "report_automation_draft_v4";
-    const MANUAL_DRAFT_KEY = "report_automation_manual_draft_v1";
-    const DRAFT_BACKUP_KEY = "report_automation_draft_backup_v1";
+    const LEGACY_AUTO_DRAFT_KEY = "report_automation_draft_v4";
+    const LEGACY_MANUAL_DRAFT_KEY = "report_automation_manual_draft_v1";
+    const LEGACY_BACKUP_DRAFT_KEY = "report_automation_draft_backup_v1";
+    const LEGACY_MIGRATED_FLAG = "report_automation_draft_idb_migrated_v1";
     let sourceCount = 0;
     let autoSaveTimer = null;
     let lastSavedSnapshotText = "";
+    let draftLibrary = null;
     let lastInferenceTaskId = null;
     let inferencePollTimer = null;
     let inferencePolling = false;
@@ -836,6 +948,46 @@
       const el = document.getElementById("draftMeta");
       if (!el) return;
       el.textContent = message || "草稿未保存";
+    }
+
+    function formatTimeStamp(ts) {
+      const value = Number(ts);
+      if (!value) return "--";
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return "--";
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} ${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}:${String(dt.getSeconds()).padStart(2, "0")}`;
+    }
+
+    function initDraftVersionOptions() {
+      const select = document.getElementById("draftVersionNo");
+      if (!select) return;
+      select.innerHTML = "";
+      for (let i = 1; i <= 10; i++) {
+        select.add(new Option(`第${i}版`, String(i)));
+      }
+      select.value = "1";
+    }
+
+    function getCurrentCompanyName() {
+      return String(document.getElementById("company_name")?.value || "").trim();
+    }
+
+    function getWorkingCompanyKey() {
+      const current = getCurrentCompanyName();
+      if (current) return current;
+      return ReportDraftLibrary.DEFAULT_UNNAMED_COMPANY;
+    }
+
+    function getCompanyDisplayName(companyName) {
+      return ReportDraftLibrary.toDisplayCompanyName(companyName);
+    }
+
+    async function initDraftLibrary() {
+      if (!window.ReportDraftLibrary) {
+        throw new Error("草稿库脚本加载失败");
+      }
+      draftLibrary = ReportDraftLibrary.createBrowserDraftLibrary();
+      await draftLibrary.init();
     }
 
     function scheduleAutoSave() {
@@ -2013,9 +2165,10 @@
       }
     }
 
-    function saveDraft(isAuto = false) {
+    function buildDraftSnapshot(isAuto = false) {
       const manualProfiles = collectManualCompanyProfiles(false).profiles;
-      const snapshot = {
+      otherProofResolvedProfiles = manualProfiles;
+      return {
         saved_ts: Date.now(),
         saved_at: new Date().toISOString(),
         saved_mode: isAuto ? "auto" : "manual",
@@ -2057,26 +2210,159 @@
         other_resolved_profiles: manualProfiles,
         other_pending_companies: otherProofPendingCompanies,
       };
-      otherProofResolvedProfiles = manualProfiles;
+    }
+
+    function applyDraftSnapshot(snapshot, sourceLabel = "草稿", silent = false) {
+      if (!snapshot || typeof snapshot !== "object") {
+        if (!silent) setStatus("草稿格式异常，恢复失败", "error");
+        return false;
+      }
+      try {
+        [
+          "province", "company_name", "product_name", "product_code", "year", "month", "day",
+          "company_intro", "product_intro", "report_body", "target_scope", "template_type", "proof_scope", "market_name",
+          "sale_23", "total_mkt_23", "pct_23", "rank_23",
+          "sale_24", "total_mkt_24", "pct_24", "rank_24",
+          "sale_25", "total_mkt_25", "pct_25", "rank_25",
+        ].forEach((key) => {
+          const el = document.getElementById(key);
+          if (el && snapshot[key] != null) {
+            el.value = snapshot[key];
+          }
+        });
+
+        lastInferenceTaskId = snapshot.last_infer_task_id || null;
+        otherProofChapter1Sections = Array.isArray(snapshot.other_chapter1_sections) ? snapshot.other_chapter1_sections : [];
+        otherProofResolvedProfiles = Array.isArray(snapshot.other_resolved_profiles) ? snapshot.other_resolved_profiles : [];
+        otherProofPendingCompanies = Array.isArray(snapshot.other_pending_companies) ? snapshot.other_pending_companies : [];
+
+        const competitorBody = document.getElementById("competitorBody");
+        competitorBody.innerHTML = "";
+        if (Array.isArray(snapshot.competitors) && snapshot.competitors.length) {
+          snapshot.competitors.forEach((item) => addCompetitorRow(item));
+        } else {
+          addCompetitorRow();
+        }
+        refreshCompetitorBoard();
+
+        const sourceHolder = document.getElementById("sources_list");
+        sourceHolder.innerHTML = "";
+        sourceCount = 0;
+        (snapshot.sources || []).forEach((s) => addSource(s));
+        if (!snapshot.sources || snapshot.sources.length === 0) addSource();
+
+        const otherLayerHolder = document.getElementById("otherLayerList");
+        otherLayerHolder.innerHTML = "";
+        if (Array.isArray(snapshot.chapter2_layers) && snapshot.chapter2_layers.length) {
+          snapshot.chapter2_layers.forEach((layer) => addOtherLayer(layer));
+        } else {
+          addOtherLayer();
+        }
+
+        renderCompanyConfirmPanel();
+        toggleTemplateMode();
+        ["23", "24", "25"].forEach(calcMyPct);
+        updateProgress();
+
+        try {
+          lastSavedSnapshotText = JSON.stringify(snapshot);
+        } catch (_e) {
+          lastSavedSnapshotText = "";
+        }
+
+        updateDraftMeta(`${sourceLabel}已恢复`);
+        if (lastInferenceTaskId) {
+          setInferenceControls(true);
+          clearInferencePoll();
+          pollInferenceTask(lastInferenceTaskId);
+          if (!silent) setStatus(`${sourceLabel}恢复成功，继续同步任务 ${lastInferenceTaskId}`);
+        } else {
+          setInferenceControls(false);
+          if (!silent) setStatus(`${sourceLabel}恢复成功`);
+        }
+        return true;
+      } catch (_e) {
+        if (!silent) setStatus("草稿格式异常，恢复失败", "error");
+        return false;
+      }
+    }
+
+    function parseLegacyDraft(raw) {
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return null;
+        return parsed;
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    function pickLegacyDraftCandidate() {
+      const candidates = [
+        parseLegacyDraft(localStorage.getItem(LEGACY_MANUAL_DRAFT_KEY)),
+        parseLegacyDraft(localStorage.getItem(LEGACY_AUTO_DRAFT_KEY)),
+        parseLegacyDraft(localStorage.getItem(LEGACY_BACKUP_DRAFT_KEY)),
+      ].filter(Boolean);
+      if (!candidates.length) return null;
+      candidates.sort((a, b) => Number(b.saved_ts || 0) - Number(a.saved_ts || 0));
+      return candidates[0];
+    }
+
+    async function migrateLegacyDraftIfNeeded() {
+      if (localStorage.getItem(LEGACY_MIGRATED_FLAG) === "1") return;
+      const legacy = pickLegacyDraftCandidate();
+      if (!legacy) {
+        localStorage.setItem(LEGACY_MIGRATED_FLAG, "1");
+        return;
+      }
+      const result = await draftLibrary.migrateLegacySnapshot(legacy);
+      if (!result || !result.migrated) {
+        throw new Error("旧草稿迁移失败");
+      }
+      localStorage.setItem(LEGACY_MIGRATED_FLAG, "1");
+      localStorage.removeItem(LEGACY_MANUAL_DRAFT_KEY);
+      localStorage.removeItem(LEGACY_AUTO_DRAFT_KEY);
+      localStorage.removeItem(LEGACY_BACKUP_DRAFT_KEY);
+      updateDraftMeta(`已迁移旧草稿（${getCompanyDisplayName(result.companyName)}）`);
+    }
+
+    async function refreshDraftMetaAtBoot() {
+      const companies = await draftLibrary.listCompanies();
+      if (!companies.length) {
+        updateDraftMeta("草稿未保存");
+        return;
+      }
+      updateDraftMeta(`检测到 ${companies.length} 家企业草稿，点击“恢复草稿”选择`);
+    }
+
+    async function saveDraft(isAuto = false) {
+      if (!draftLibrary) {
+        updateDraftMeta("草稿保存失败");
+        setStatus("草稿库未初始化，无法保存", "error");
+        return false;
+      }
+      const snapshot = buildDraftSnapshot(isAuto);
       let snapshotText = "";
       try {
         snapshotText = JSON.stringify(snapshot);
-        if (isAuto && snapshotText === lastSavedSnapshotText) {
-          return true;
-        }
-        const previousAuto = localStorage.getItem(DRAFT_KEY);
-        if (previousAuto && previousAuto !== snapshotText) {
-          localStorage.setItem(DRAFT_BACKUP_KEY, previousAuto);
-        }
-        localStorage.setItem(DRAFT_KEY, snapshotText);
-        if (!isAuto) {
-          localStorage.setItem(MANUAL_DRAFT_KEY, snapshotText);
-        }
       } catch (_e) {
         updateDraftMeta("草稿保存失败");
-        setStatus("草稿保存失败：浏览器本地存储不可用", "error");
+        setStatus("草稿保存失败：草稿数据无法序列化", "error");
         return false;
       }
+      if (isAuto && snapshotText === lastSavedSnapshotText) {
+        return true;
+      }
+
+      try {
+        await draftLibrary.saveWorkingDraft(getWorkingCompanyKey(), snapshot, Number(snapshot.saved_ts) || Date.now());
+      } catch (err) {
+        updateDraftMeta("草稿保存失败");
+        setStatus(`草稿保存失败：${err.message || "IndexedDB 写入失败"}`, "error");
+        return false;
+      }
+
       lastSavedSnapshotText = snapshotText;
       const now = new Date();
       const stamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
@@ -2085,120 +2371,170 @@
       return true;
     }
 
-    function loadDraft(silent = false, preferManual = true) {
-      const manualRaw = localStorage.getItem(MANUAL_DRAFT_KEY);
-      const autoRaw = localStorage.getItem(DRAFT_KEY);
-      const backupRaw = localStorage.getItem(DRAFT_BACKUP_KEY);
-      const parseDraft = (raw) => {
-        if (!raw) return null;
-        try {
-          const payload = JSON.parse(raw);
-          if (!payload || typeof payload !== "object") return null;
-          return payload;
-        } catch (_e) {
-          return null;
-        }
-      };
-      const manualDraft = parseDraft(manualRaw);
-      const autoDraft = parseDraft(autoRaw);
-      const backupDraft = parseDraft(backupRaw);
-      if (!manualDraft && !autoDraft && !backupDraft) {
-        if (!silent) setStatus("没有可恢复的草稿", "error");
+    async function saveDraftVersion() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，无法保留版本", "error");
+        return;
+      }
+      const companyName = getCurrentCompanyName();
+      if (!companyName) {
+        setStatus("请先填写企业名称，再保留版本", "error");
+        return;
+      }
+      const versionNo = Number(document.getElementById("draftVersionNo")?.value || "1");
+      const snapshot = buildDraftSnapshot(false);
+      snapshot.saved_mode = "version";
+      snapshot.saved_version_no = versionNo;
+      try {
+        await draftLibrary.saveVersionDraft(companyName, versionNo, snapshot, Number(snapshot.saved_ts) || Date.now());
+      } catch (err) {
+        setStatus(`保留版本失败：${err.message || "IndexedDB 写入失败"}`, "error");
+        return;
+      }
+      updateDraftMeta(`${companyName} 第${versionNo}版已保留`);
+      setStatus(`${companyName} 第${versionNo}版已保留`);
+    }
+
+    function closeDraftRestoreModal() {
+      document.getElementById("draftRestoreModal")?.classList.remove("show");
+    }
+
+    async function openDraftRestoreModal() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，无法恢复草稿", "error");
+        return;
+      }
+      const companySelect = document.getElementById("restoreCompanySelect");
+      const entrySelect = document.getElementById("restoreEntrySelect");
+      const info = document.getElementById("restoreDraftInfo");
+      const companies = await draftLibrary.listCompanies();
+
+      companySelect.innerHTML = "";
+      entrySelect.innerHTML = "";
+      if (!companies.length) {
+        info.textContent = "没有可恢复的草稿。";
+        setStatus("没有可恢复的草稿", "error");
         return;
       }
 
-      let sourceType = "auto";
-      let d = autoDraft || manualDraft || backupDraft;
-      if (manualDraft && autoDraft) {
-        const manualTs = Number(manualDraft.saved_ts || 0);
-        const autoTs = Number(autoDraft.saved_ts || 0);
-        if (manualTs && autoTs) {
-          if (manualTs >= autoTs) {
-            d = manualDraft;
-            sourceType = "manual";
-          } else {
-            d = autoDraft;
-            sourceType = "auto";
-          }
-        } else if (preferManual) {
-          d = manualDraft;
-          sourceType = "manual";
-        } else {
-          d = autoDraft;
-          sourceType = "auto";
-        }
-      } else if (manualDraft) {
-        d = manualDraft;
-        sourceType = "manual";
-      } else if (!autoDraft && backupDraft) {
-        d = backupDraft;
-        sourceType = "backup";
+      companies.forEach((item) => {
+        const label = `${getCompanyDisplayName(item.companyName)}（版本 ${item.versionCount}）`;
+        companySelect.add(new Option(label, item.companyName));
+      });
+      companySelect.value = companies[0].companyName;
+      document.getElementById("draftRestoreModal")?.classList.add("show");
+      await refreshRestoreEntryOptions();
+    }
+
+    function parseRestoreEntryValue(raw) {
+      const parts = String(raw || "").split(":");
+      if (parts.length !== 2) return null;
+      const kind = parts[0] === "version" ? "version" : "working";
+      const versionNo = Number(parts[1] || "0");
+      return { kind, versionNo: Number.isFinite(versionNo) ? versionNo : 0 };
+    }
+
+    function updateRestoreDeleteButtonState() {
+      const entrySelect = document.getElementById("restoreEntrySelect");
+      const deleteBtn = document.getElementById("deleteSelectedVersionBtn");
+      const parsed = parseRestoreEntryValue(entrySelect?.value || "");
+      const isVersion = !!parsed && parsed.kind === "version";
+      if (deleteBtn) {
+        deleteBtn.disabled = !isVersion;
       }
+    }
 
+    async function refreshRestoreEntryOptions() {
+      const companySelect = document.getElementById("restoreCompanySelect");
+      const entrySelect = document.getElementById("restoreEntrySelect");
+      const info = document.getElementById("restoreDraftInfo");
+      const companyName = companySelect?.value || "";
+      if (!companyName) {
+        entrySelect.innerHTML = "";
+        info.textContent = "请选择企业。";
+        updateRestoreDeleteButtonState();
+        return;
+      }
+      const entries = await draftLibrary.listCompanyDrafts(companyName);
+      entrySelect.innerHTML = "";
+      if (!entries.length) {
+        info.textContent = "该企业没有可恢复草稿。";
+        updateRestoreDeleteButtonState();
+        return;
+      }
+      entries.forEach((item) => {
+        const label = item.kind === "working"
+          ? `工作草稿（${formatTimeStamp(item.savedTs)}）`
+          : `第${item.versionNo}版（${formatTimeStamp(item.savedTs)}）`;
+        entrySelect.add(new Option(label, `${item.kind}:${item.versionNo || 0}`));
+      });
+      const selectedEntry = entries[0];
+      info.textContent = `当前企业：${getCompanyDisplayName(companyName)}，最近保存：${formatTimeStamp(selectedEntry.savedTs)}`;
+      updateRestoreDeleteButtonState();
+    }
+
+    async function restoreSelectedDraft() {
+      const companyName = document.getElementById("restoreCompanySelect")?.value || "";
+      const parsed = parseRestoreEntryValue(document.getElementById("restoreEntrySelect")?.value || "");
+      if (!companyName || !parsed) {
+        setStatus("请选择要恢复的草稿", "error");
+        return;
+      }
+      const record = await draftLibrary.getDraft(companyName, parsed.kind, parsed.versionNo);
+      if (!record || !record.snapshot) {
+        setStatus("选中的草稿不存在或已删除", "error");
+        return;
+      }
+      const sourceLabel = parsed.kind === "working" ? `${getCompanyDisplayName(companyName)}工作草稿` : `${getCompanyDisplayName(companyName)}第${parsed.versionNo}版`;
+      const ok = applyDraftSnapshot(record.snapshot, sourceLabel, false);
+      if (ok) {
+        closeDraftRestoreModal();
+      }
+    }
+
+    async function deleteSelectedVersion() {
+      const companyName = document.getElementById("restoreCompanySelect")?.value || "";
+      const parsed = parseRestoreEntryValue(document.getElementById("restoreEntrySelect")?.value || "");
+      if (!companyName || !parsed || parsed.kind !== "version") {
+        setStatus("请先选择要删除的版本草稿", "error");
+        return;
+      }
+      if (!window.confirm(`确认删除 ${getCompanyDisplayName(companyName)} 第${parsed.versionNo}版吗？`)) return;
+      await draftLibrary.deleteVersionDraft(companyName, parsed.versionNo);
+      setStatus(`${getCompanyDisplayName(companyName)} 第${parsed.versionNo}版已删除`);
+      await refreshRestoreEntryOptions();
+    }
+
+    async function deleteSelectedCompany() {
+      const companyName = document.getElementById("restoreCompanySelect")?.value || "";
+      if (!companyName) {
+        setStatus("请先选择企业", "error");
+        return;
+      }
+      if (!window.confirm(`确认删除 ${getCompanyDisplayName(companyName)} 的全部草稿和版本吗？`)) return;
+      await draftLibrary.deleteCompany(companyName);
+      setStatus(`${getCompanyDisplayName(companyName)} 的全部草稿已删除`);
+      const companies = await draftLibrary.listCompanies();
+      if (!companies.length) {
+        closeDraftRestoreModal();
+        updateDraftMeta("草稿未保存");
+        return;
+      }
+      const companySelect = document.getElementById("restoreCompanySelect");
+      companySelect.innerHTML = "";
+      companies.forEach((item) => {
+        const label = `${getCompanyDisplayName(item.companyName)}（版本 ${item.versionCount}）`;
+        companySelect.add(new Option(label, item.companyName));
+      });
+      companySelect.value = companies[0].companyName;
+      await refreshRestoreEntryOptions();
+    }
+
+    async function loadDraft() {
       try {
-        [
-          "province", "company_name", "product_name", "product_code", "year", "month", "day",
-          "company_intro", "product_intro", "report_body", "target_scope", "template_type", "proof_scope", "market_name",
-          "sale_23", "total_mkt_23", "pct_23", "rank_23",
-          "sale_24", "total_mkt_24", "pct_24", "rank_24",
-          "sale_25", "total_mkt_25", "pct_25", "rank_25",
-        ].forEach((k) => {
-          if (document.getElementById(k) && d[k] != null) document.getElementById(k).value = d[k];
-        });
-        lastInferenceTaskId = d.last_infer_task_id || null;
-        otherProofChapter1Sections = Array.isArray(d.other_chapter1_sections) ? d.other_chapter1_sections : [];
-        otherProofResolvedProfiles = Array.isArray(d.other_resolved_profiles) ? d.other_resolved_profiles : [];
-        otherProofPendingCompanies = Array.isArray(d.other_pending_companies) ? d.other_pending_companies : [];
-
-        const competitorBody = document.getElementById("competitorBody");
-        competitorBody.innerHTML = "";
-        if (Array.isArray(d.competitors) && d.competitors.length) {
-          d.competitors.forEach((item) => addCompetitorRow(item));
-        } else {
-          addCompetitorRow();
-        }
-        refreshCompetitorBoard();
-
-        const holder = document.getElementById("sources_list");
-        holder.innerHTML = "";
-        sourceCount = 0;
-        (d.sources || []).forEach((s) => addSource(s));
-        if (!d.sources || d.sources.length === 0) addSource();
-
-        const otherLayerHolder = document.getElementById("otherLayerList");
-        otherLayerHolder.innerHTML = "";
-        if (Array.isArray(d.chapter2_layers) && d.chapter2_layers.length) {
-          d.chapter2_layers.forEach((layer) => addOtherLayer(layer));
-        } else {
-          addOtherLayer();
-        }
-
-        renderCompanyConfirmPanel();
-        toggleTemplateMode();
-
-        ["23", "24", "25"].forEach(calcMyPct);
-        updateProgress();
-        try {
-          lastSavedSnapshotText = JSON.stringify(d);
-        } catch (_e) {
-          lastSavedSnapshotText = "";
-        }
-        if (sourceType === "manual") updateDraftMeta("手动草稿已恢复");
-        else if (sourceType === "backup") updateDraftMeta("草稿备份已恢复");
-        else updateDraftMeta("自动草稿已恢复");
-        if (lastInferenceTaskId) {
-          setInferenceControls(true);
-          clearInferencePoll();
-          pollInferenceTask(lastInferenceTaskId);
-          if (!silent) {
-            setStatus(`草稿恢复成功，继续同步任务 ${lastInferenceTaskId}`);
-          }
-        } else {
-          setInferenceControls(false);
-          if (!silent) setStatus("草稿恢复成功");
-        }
-      } catch (_e) {
-        if (!silent) setStatus("草稿格式异常，恢复失败", "error");
+        await openDraftRestoreModal();
+      } catch (err) {
+        setStatus(`恢复草稿失败：${err.message || "读取失败"}`, "error");
       }
     }
 
@@ -2255,23 +2591,21 @@
       updateProgress();
     }
 
-    function clearDraft() {
-      localStorage.removeItem(DRAFT_KEY);
-      localStorage.removeItem(MANUAL_DRAFT_KEY);
-      localStorage.removeItem(DRAFT_BACKUP_KEY);
+    async function clearDraft() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，无法清空草稿", "error");
+        return;
+      }
+      try {
+        await draftLibrary.clearWorkingDraft(getWorkingCompanyKey());
+      } catch (err) {
+        setStatus(`清空草稿失败：${err.message || "IndexedDB 删除失败"}`, "error");
+        return;
+      }
       lastSavedSnapshotText = "";
       resetFormToBlank();
-      updateDraftMeta("草稿已清空");
-      setStatus("草稿已清空，页面已重置");
-    }
-
-    function isFormEssentiallyEmpty() {
-      const keyFields = [
-        "company_name", "product_name", "product_code",
-        "company_intro", "product_intro",
-        "sale_23", "sale_24", "sale_25",
-      ];
-      return keyFields.every((id) => !String(document.getElementById(id)?.value || "").trim());
+      updateDraftMeta("当前公司工作草稿已清空");
+      setStatus("已清空当前公司工作草稿，版本草稿保留");
     }
 
     function bindAutoSave() {
@@ -2314,31 +2648,40 @@
       }, true);
     }
 
-    initDates();
-    document.getElementById("template_type").addEventListener("change", toggleTemplateMode);
-    addSource();
-    addCompetitorRow();
-    addOtherLayer();
-    refreshCompetitorBoard();
-    bindAutoSave();
-    toggleTemplateMode();
-    updateProgress();
-    const hasAnyDraft = !!(localStorage.getItem(DRAFT_KEY) || localStorage.getItem(MANUAL_DRAFT_KEY) || localStorage.getItem(DRAFT_BACKUP_KEY));
-    let autoRestoredAtBoot = false;
-    updateDraftMeta(hasAnyDraft ? "检测到本地草稿，可直接恢复" : "草稿未保存");
-    if (hasAnyDraft && isFormEssentiallyEmpty()) {
-      loadDraft(true, true);
-      setStatus("已自动恢复最近草稿");
-      autoRestoredAtBoot = true;
-    }
-    if (lastInferenceTaskId) {
-      setInferenceControls(true);
-      setStatus(`已恢复任务 ${lastInferenceTaskId}，正在同步进度...`);
-      pollInferenceTask(lastInferenceTaskId);
-    } else {
+    async function bootApp() {
+      initDraftVersionOptions();
+      initDates();
+      document.getElementById("template_type").addEventListener("change", toggleTemplateMode);
+      addSource();
+      addCompetitorRow();
+      addOtherLayer();
+      refreshCompetitorBoard();
+      bindAutoSave();
+      toggleTemplateMode();
+      updateProgress();
       setInferenceControls(false);
-      if (!autoRestoredAtBoot) setStatus("页面已就绪，可开始录入");
+
+      const modal = document.getElementById("draftRestoreModal");
+      if (modal) {
+        modal.addEventListener("click", (event) => {
+          if (event.target === modal) {
+            closeDraftRestoreModal();
+          }
+        });
+      }
+
+      try {
+        await initDraftLibrary();
+        await migrateLegacyDraftIfNeeded();
+        await refreshDraftMetaAtBoot();
+        setStatus("页面已就绪，可开始录入");
+      } catch (err) {
+        updateDraftMeta("草稿库初始化失败");
+        setStatus(`草稿库初始化失败：${err.message || "IndexedDB 不可用"}`, "error");
+      }
     }
+
+    bootApp();
 
     window.addEventListener("beforeunload", () => {
       saveDraft(true);
