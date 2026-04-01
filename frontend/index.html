@@ -635,7 +635,7 @@
                 <th>销售额 (万元)</th>
                 <th>市场规模 (万元)</th>
                 <th>占有率 (自动算)</th>
-                <th>排名（可选）</th>
+                <th>排名（自动算）</th>
               </tr>
             </thead>
             <tbody>
@@ -644,21 +644,21 @@
                 <td><input id="sale_23" oninput="calcMyPct('23')" /></td>
                 <td><input id="total_mkt_23" oninput="calcMyPct('23')" /></td>
                 <td><input id="pct_23" readonly /></td>
-                <td><input id="rank_23" /></td>
+                <td><input id="rank_23" readonly /></td>
               </tr>
               <tr>
                 <td>2024</td>
                 <td><input id="sale_24" oninput="calcMyPct('24')" /></td>
                 <td><input id="total_mkt_24" oninput="calcMyPct('24')" /></td>
                 <td><input id="pct_24" readonly /></td>
-                <td><input id="rank_24" /></td>
+                <td><input id="rank_24" readonly /></td>
               </tr>
               <tr>
                 <td>2025</td>
                 <td><input id="sale_25" oninput="calcMyPct('25')" /></td>
                 <td><input id="total_mkt_25" oninput="calcMyPct('25')" /></td>
                 <td><input id="pct_25" readonly /></td>
-                <td><input id="rank_25" /></td>
+                <td><input id="rank_25" readonly /></td>
               </tr>
             </tbody>
           </table>
@@ -717,15 +717,15 @@
           <table id="comp_table" style="margin-top:6px;">
             <thead>
               <tr>
-                <th>对手名称</th>
-                <th>2023销售额(万元)</th><th>2023占有率</th>
-                <th>2024销售额(万元)</th><th>2024占有率</th>
-                <th>2025销售额(万元)</th><th>2025占有率</th>
+                <th>企业名称</th>
+                <th>2023销售额(万元)</th><th>2023占有率</th><th>2023排名</th>
+                <th>2024销售额(万元)</th><th>2024占有率</th><th>2024排名</th>
+                <th>2025销售额(万元)</th><th>2025占有率</th><th>2025排名</th>
               </tr>
             </thead>
             <tbody id="competitorBody"></tbody>
           </table>
-          <div class="section-note">竞争对手信息与数据来源分开维护，避免混淆。</div>
+          <div class="section-note">表格包含我司和竞争对手，并按 2025 年市占率自动降序；三年排名自动计算。</div>
         </section>
 
         <section class="panel" id="step5">
@@ -882,7 +882,7 @@
       } else {
         pctEl.value = "";
       }
-      syncAllCompetitorRowsByYear(year);
+      refreshCompetitorBoard();
       updateProgress();
     }
 
@@ -954,6 +954,7 @@
 
     function syncAllCompetitorRowsByYear(year) {
       document.querySelectorAll("#comp_table tbody tr").forEach((row) => {
+        if (row.classList.contains("self-row")) return;
         syncCompetitorRowByPreference(row, year);
       });
     }
@@ -963,8 +964,98 @@
       if (!row) return;
       row.dataset[`pref${year}`] = mode;
       syncCompetitorRowByPreference(row, year);
+      refreshCompetitorBoard();
       scheduleAutoSave();
       updateProgress();
+    }
+
+    function ensureSelfCompetitorRow() {
+      const body = document.getElementById("competitorBody");
+      let row = body.querySelector("tr.self-row");
+      if (!row) {
+        row = document.createElement("tr");
+        row.className = "self-row";
+        row.innerHTML = `
+          <td><input class="c-name" readonly /></td>
+          <td><input class="c-s23" readonly /></td>
+          <td><input class="c-p23" readonly /></td>
+          <td><input class="c-r23" readonly /></td>
+          <td><input class="c-s24" readonly /></td>
+          <td><input class="c-p24" readonly /></td>
+          <td><input class="c-r24" readonly /></td>
+          <td><input class="c-s25" readonly /></td>
+          <td><input class="c-p25" readonly /></td>
+          <td><input class="c-r25" readonly /></td>
+        `;
+        body.appendChild(row);
+      }
+      row.querySelector(".c-name").value = (document.getElementById("company_name").value || "").trim() || "（我司）";
+      ["23", "24", "25"].forEach((year) => {
+        row.querySelector(`.c-s${year}`).value = document.getElementById(`sale_${year}`).value || "";
+        row.querySelector(`.c-p${year}`).value = document.getElementById(`pct_${year}`).value || "";
+      });
+      return row;
+    }
+
+    function parseRowYearRatio(row, year) {
+      const input = row.querySelector(`.c-p${year}`);
+      return parsePercentRatio(input ? input.value : "");
+    }
+
+    function computeYearRankMap(rows, year) {
+      const ranked = rows
+        .map((row) => ({ row, ratio: parseRowYearRatio(row, year) }))
+        .filter((item) => item.ratio !== null)
+        .sort((a, b) => b.ratio - a.ratio);
+      const map = new Map();
+      ranked.forEach((item, idx) => map.set(item.row, idx + 1));
+      return map;
+    }
+
+    function sortCompetitorRowsBy2025() {
+      const body = document.getElementById("competitorBody");
+      const rows = Array.from(body.querySelectorAll("tr"));
+      rows.sort((a, b) => {
+        const ra = parseRowYearRatio(a, "25");
+        const rb = parseRowYearRatio(b, "25");
+        if (ra === null && rb === null) return 0;
+        if (ra === null) return 1;
+        if (rb === null) return -1;
+        return rb - ra;
+      });
+      rows.forEach((row) => body.appendChild(row));
+      return rows;
+    }
+
+    function applyRanksToTable(rows) {
+      const rank23 = computeYearRankMap(rows, "23");
+      const rank24 = computeYearRankMap(rows, "24");
+      const rank25 = computeYearRankMap(rows, "25");
+
+      rows.forEach((row) => {
+        const r23 = rank23.get(row) || "";
+        const r24 = rank24.get(row) || "";
+        const r25 = rank25.get(row) || "";
+        const r23Input = row.querySelector(".c-r23");
+        const r24Input = row.querySelector(".c-r24");
+        const r25Input = row.querySelector(".c-r25");
+        if (r23Input) r23Input.value = r23 ? `第${r23}` : "";
+        if (r24Input) r24Input.value = r24 ? `第${r24}` : "";
+        if (r25Input) r25Input.value = r25 ? `第${r25}` : "";
+
+        if (row.classList.contains("self-row")) {
+          document.getElementById("rank_23").value = r23 ? `第${r23}` : "";
+          document.getElementById("rank_24").value = r24 ? `第${r24}` : "";
+          document.getElementById("rank_25").value = r25 ? `第${r25}` : "";
+        }
+      });
+    }
+
+    function refreshCompetitorBoard() {
+      ensureSelfCompetitorRow();
+      ["23", "24", "25"].forEach((year) => syncAllCompetitorRowsByYear(year));
+      const rows = sortCompetitorRowsBy2025();
+      applyRanksToTable(rows);
     }
 
     function updateProgress() {
@@ -1001,27 +1092,31 @@
     function addCompetitorRow(prefill) {
       const tr = document.createElement("tr");
       tr.innerHTML = `
-        <td><input class="c-name" value="${prefill?.name || ""}"></td>
-        <td><input class="c-s23" value="${prefill?.sale_23 || prefill?.s23 || ""}" oninput="competitorInputChanged(this, '23', 'sale')" /></td>
-        <td><input class="c-p23" value="${prefill?.p23 || ""}" oninput="competitorInputChanged(this, '23', 'pct')" /></td>
-        <td><input class="c-s24" value="${prefill?.sale_24 || prefill?.s24 || ""}" oninput="competitorInputChanged(this, '24', 'sale')" /></td>
-        <td><input class="c-p24" value="${prefill?.p24 || ""}" oninput="competitorInputChanged(this, '24', 'pct')" /></td>
-        <td><input class="c-s25" value="${prefill?.sale_25 || prefill?.s25 || ""}" oninput="competitorInputChanged(this, '25', 'sale')" /></td>
         <td>
           <div style="display:flex;gap:6px;align-items:center;">
-            <input class="c-p25" value="${prefill?.p25 || ""}" oninput="competitorInputChanged(this, '25', 'pct')" />
+            <input class="c-name" value="${prefill?.name || ""}">
             <button class="source-del" type="button" style="position:static;flex:0 0 auto;" onclick="removeCompetitorRow(this)">×</button>
           </div>
         </td>
+        <td><input class="c-s23" value="${prefill?.sale_23 || prefill?.s23 || ""}" oninput="competitorInputChanged(this, '23', 'sale')" /></td>
+        <td><input class="c-p23" value="${prefill?.p23 || ""}" oninput="competitorInputChanged(this, '23', 'pct')" /></td>
+        <td><input class="c-r23" readonly /></td>
+        <td><input class="c-s24" value="${prefill?.sale_24 || prefill?.s24 || ""}" oninput="competitorInputChanged(this, '24', 'sale')" /></td>
+        <td><input class="c-p24" value="${prefill?.p24 || ""}" oninput="competitorInputChanged(this, '24', 'pct')" /></td>
+        <td><input class="c-r24" readonly /></td>
+        <td><input class="c-s25" value="${prefill?.sale_25 || prefill?.s25 || ""}" oninput="competitorInputChanged(this, '25', 'sale')" /></td>
+        <td><input class="c-p25" value="${prefill?.p25 || ""}" oninput="competitorInputChanged(this, '25', 'pct')" /></td>
+        <td><input class="c-r25" readonly /></td>
       `;
       document.getElementById("competitorBody").appendChild(tr);
-      ["23", "24", "25"].forEach((year) => syncCompetitorRowByPreference(tr, year));
+      refreshCompetitorBoard();
     }
 
     function removeCompetitorRow(button) {
       const tr = button.closest("tr");
       if (!tr) return;
       tr.remove();
+      refreshCompetitorBoard();
       resetOtherCompanyLookupState();
       saveDraft();
     }
@@ -1088,6 +1183,7 @@
     function collectCompetitors() {
       const rows = [];
       document.querySelectorAll("#comp_table tbody tr").forEach((tr) => {
+        if (tr.classList.contains("self-row")) return;
         rows.push({
           name: tr.querySelector(".c-name").value,
           sale_23: tr.querySelector(".c-s23").value,
@@ -2040,6 +2136,7 @@
         } else {
           addCompetitorRow();
         }
+        refreshCompetitorBoard();
 
         const holder = document.getElementById("sources_list");
         holder.innerHTML = "";
@@ -2103,6 +2200,7 @@
       const competitorBody = document.getElementById("competitorBody");
       competitorBody.innerHTML = "";
       addCompetitorRow();
+      refreshCompetitorBoard();
 
       const sourceHolder = document.getElementById("sources_list");
       sourceHolder.innerHTML = "";
@@ -2145,6 +2243,9 @@
           if (target.matches("#company_name, .c-name")) {
             resetOtherCompanyLookupState();
           }
+          if (target.matches("#company_name, #sale_23, #sale_24, #sale_25, #pct_23, #pct_24, #pct_25, #total_mkt_23, #total_mkt_24, #total_mkt_25")) {
+            refreshCompetitorBoard();
+          }
           scheduleAutoSave();
           updateProgress();
         }
@@ -2157,6 +2258,9 @@
           if (target.matches("#company_name, .c-name")) {
             resetOtherCompanyLookupState();
           }
+          if (target.matches("#company_name, #sale_23, #sale_24, #sale_25, #pct_23, #pct_24, #pct_25, #total_mkt_23, #total_mkt_24, #total_mkt_25")) {
+            refreshCompetitorBoard();
+          }
           scheduleAutoSave();
           updateProgress();
         }
@@ -2168,6 +2272,7 @@
     addSource();
     addCompetitorRow();
     addOtherLayer();
+    refreshCompetitorBoard();
     bindAutoSave();
     toggleTemplateMode();
     updateProgress();

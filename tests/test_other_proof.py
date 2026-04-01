@@ -4,10 +4,13 @@ import xml.etree.ElementTree as ET
 
 import other_proof
 from other_proof import (
+    _build_chart_number_plan,
     _build_chapter1_prompt,
     _build_company_rows,
+    _rewrite_dynamic_chart_references,
     _set_paragraph_text,
     _validate_manual_company_profiles,
+    _ensure_supply_chain_subsections,
     lookup_other_companies,
     normalize_chapter1_sections,
 )
@@ -55,13 +58,10 @@ def test_normalize_chapter1_sections_supply_chain_always_has_five_subsections():
         ]
     )
     target = next(item for item in sections if item["key"] == "industry_supply_chain")
-    visible = [p for p in target["paragraphs"] if str(p).strip() and p != other_proof.PLACEHOLDER_TEXT][:5]
-    assert len(visible) == 5
-    assert visible[0].startswith("（一）")
-    assert visible[1].startswith("（二）")
-    assert visible[2].startswith("（三）")
-    assert visible[3].startswith("（四）")
-    assert visible[4].startswith("（五）")
+    visible = [p for p in target["paragraphs"] if str(p).strip() and p != other_proof.PLACEHOLDER_TEXT][:6]
+    assert len(visible) == 6
+    assert visible[0] == "上游材料环节以铜材和工程塑料为主，供应稳定性直接影响交付周期。"
+    assert all(str(item).strip() for item in visible[1:])
 
 
 def test_lookup_other_companies_uses_browser_qcc_result(monkeypatch):
@@ -191,3 +191,69 @@ def test_set_paragraph_text_replaces_old_hyperlink_text():
     _set_paragraph_text(paragraph, "https://new.example.com")
     rendered = "".join(node.text or "" for node in paragraph.findall(".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"))
     assert rendered == "https://new.example.com"
+
+
+def test_build_chart_number_plan_uses_layer_count_as_offset():
+    plan = _build_chart_number_plan(layer_count=2, company_count=3)
+
+    assert plan["layer"] == [1, 2]
+    assert plan["company"] == [3, 4, 5]
+    assert plan["comparison"] == 6
+    assert plan["share"] == 7
+    assert plan["chapter5_source"] == 8
+
+
+def test_rewrite_dynamic_chart_references_replaces_hardcoded_rank_and_chart_numbers():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def build_paragraph(text: str) -> ET.Element:
+        return ET.fromstring(
+            f"""
+            <w:p xmlns:w="{ns}">
+              <w:r><w:t>{text}</w:t></w:r>
+            </w:p>
+            """
+        )
+
+    paragraphs = [
+        build_paragraph("应急用IEC电源连接器市场规模及各企业销售额如图表8所示。"),
+        build_paragraph("图表9：2023-2025年宁波意缆可电器有限公司高安全性自锁紧型电源连接系统市场占有率"),
+        build_paragraph("图表10 政府端数据来源"),
+        build_paragraph("由以上分析可知，......“市场占有率全球第一”的市场地位结论成立。"),
+    ]
+    _rewrite_dynamic_chart_references(
+        children=paragraphs,
+        chart_plan={"comparison": 6, "share": 7, "chapter5_source": 8},
+        self_row={
+            "display_name": "宁波意缆可电器有限公司",
+            "pct23": "17.73%",
+            "pct24": "17.68%",
+            "pct25": "19.10%",
+        },
+        rank_map={"2025": {"宁波意缆可电器有限公司": 2}},
+        proof_scope="全国",
+        product_name="高安全性自锁紧型电源连接系统",
+    )
+
+    rendered = [
+        "".join(node.text or "" for node in p.findall(f".//{{{ns}}}t"))
+        for p in paragraphs
+    ]
+    assert "图表6" in rendered[0]
+    assert rendered[1].startswith("图表7：")
+    assert rendered[2].startswith("图表8")
+    assert "全国第二" in rendered[3]
+    assert "全球第一" not in rendered[3]
+
+
+def test_ensure_supply_chain_subsections_splits_combined_markers():
+    paragraphs = [
+        "（一）上游环节说明：A。（二）中游环节说明：B。（三）下游环节说明：C。",
+    ]
+    result = _ensure_supply_chain_subsections(paragraphs)
+
+    assert len(result) >= 6
+    assert "（二）" not in result[1]
+    assert "（三）" not in result[2]
+    assert "A" in result[1]
+    assert "B" in result[2]

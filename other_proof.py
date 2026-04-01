@@ -748,6 +748,10 @@ def _postprocess_other_document(
         children[56],
         f"测算 2023-2025年各企业的市场占有率，并对销售额进行排名，确定{self_row['display_name']}{product_name}在{proof_scope}市场的名次。",
     )
+    chart_plan = _build_chart_number_plan(
+        layer_count=metadata["layer_count"],
+        company_count=metadata["company_count"],
+    )
 
     for idx, start in enumerate(metadata["layer_starts"], start=1):
         heading_index = start
@@ -756,17 +760,23 @@ def _postprocess_other_document(
         layer = chapter2_layers[idx - 1]
         layer_name = str(layer.get("name") or "").strip()
         _set_paragraph_text(children[heading_index], f"{_section_index_cn(idx)}、{layer_name}市场情况分析")
-        _set_paragraph_text(children[chart_index], f"图表{idx}：2023-2025年{layer_name}市场规模（亿元）")
+        _set_paragraph_text(
+            children[chart_index],
+            f"图表{chart_plan['layer'][idx - 1]}：2023-2025年{layer_name}市场规模（亿元）",
+        )
         _set_paragraph_text(children[source_index], f"数据来源：算路科技整理（见链接{idx}）")
 
     for idx, start in enumerate(metadata["company_starts"], start=1):
         row = sorted_rows[idx - 1]
         _set_paragraph_text(children[start], f"{_section_index_cn(idx)}、主导产品企业分析——{row['display_name']}")
-        _set_paragraph_text(children[start + 2], f"图表{idx + 3}：{row['display_name']}")
+        _set_paragraph_text(
+            children[start + 2],
+            f"图表{chart_plan['company'][idx - 1]}：{row['display_name']}",
+        )
 
     _set_paragraph_text(
         children[metadata["chart8_title_index"]],
-        f"图表8：2023-2025年{proof_scope}主导企业{proof_scope}销售额及占有率排名情况",
+        f"图表{chart_plan['comparison']}：2023-2025年{proof_scope}主导企业{proof_scope}销售额及占有率排名情况",
     )
 
     execution_start = report_date - timedelta(days=10)
@@ -781,7 +791,74 @@ def _postprocess_other_document(
         links=[str(layer.get("url") or "").strip() for layer in chapter2_layers],
         warnings=warnings,
     )
+    _rewrite_dynamic_chart_references(
+        children=children,
+        chart_plan=chart_plan,
+        self_row=self_row,
+        rank_map=rank_map,
+        proof_scope=proof_scope,
+        product_name=product_name,
+    )
     _rewrite_chart9_labels(children[metadata["chart9_table_index"]], proof_scope)
+
+
+def _build_chart_number_plan(*, layer_count: int, company_count: int) -> Dict[str, Any]:
+    layer_numbers = list(range(1, layer_count + 1))
+    company_start = layer_count + 1
+    company_numbers = list(range(company_start, company_start + company_count))
+    comparison_number = company_start + company_count
+    share_chart_number = comparison_number + 1
+    chapter5_source_chart_number = share_chart_number + 1
+    return {
+        "layer": layer_numbers,
+        "company": company_numbers,
+        "comparison": comparison_number,
+        "share": share_chart_number,
+        "chapter5_source": chapter5_source_chart_number,
+    }
+
+
+def _rewrite_dynamic_chart_references(
+    *,
+    children: Sequence[ET.Element],
+    chart_plan: Dict[str, Any],
+    self_row: Dict[str, Any],
+    rank_map: Dict[str, Dict[str, int]],
+    proof_scope: str,
+    product_name: str,
+) -> None:
+    self_rank_25 = rank_map["2025"][self_row["display_name"]]
+    scope_rank_plain = f"{proof_scope}{_ordinal_plain(self_rank_25)}"
+    chapter4_dynamic_conclusion = (
+        f"由以上分析可知，2023年至2025年，{self_row['display_name']}的{product_name}市场占有率分别为："
+        f"{self_row['pct23']}、{self_row['pct24']}、{self_row['pct25']}。 因此，算路科技认为，"
+        f"{self_row['display_name']}“{product_name}市场占有率{scope_rank_plain}”的市场地位结论成立。"
+    )
+
+    for child in children:
+        if child.tag != f"{{{NS['w']}}}p":
+            continue
+        text = _get_paragraph_text(child)
+        if not text:
+            continue
+
+        if "销售额如图表" in text:
+            updated = re.sub(r"图表\d+", f"图表{chart_plan['comparison']}", text, count=1)
+            _set_paragraph_text(child, updated)
+            continue
+
+        if text.startswith("图表") and "市场占有率" in text and self_row["display_name"] in text:
+            updated = re.sub(r"^图表\d+", f"图表{chart_plan['share']}", text, count=1)
+            _set_paragraph_text(child, updated)
+            continue
+
+        if "政府端数据来源" in text and text.startswith("图表"):
+            updated = re.sub(r"^图表\d+", f"图表{chart_plan['chapter5_source']}", text, count=1)
+            _set_paragraph_text(child, updated)
+            continue
+
+        if "由以上分析可知" in text and "市场地位结论成立" in text:
+            _set_paragraph_text(child, chapter4_dynamic_conclusion)
 
 
 
@@ -939,6 +1016,9 @@ def _compress_chapter1_visual_paragraphs(root: ET.Element, field_paragraphs: Seq
         cursor += slot_count
         if not section_paragraphs:
             continue
+        if spec["key"] == "industry_supply_chain":
+            # 供应链章节模板里存在固定小节标题结构，禁止做可视压缩，避免标题与正文错位。
+            continue
 
         unique_paragraphs: List[ET.Element] = []
         section_texts: List[str] = []
@@ -972,10 +1052,18 @@ def _remove_element(root: ET.Element, target: ET.Element) -> None:
 
 
 def _flatten_chapter1_slots(sections: Sequence[Dict[str, Any]]) -> List[str]:
+    section_map: Dict[str, Dict[str, Any]] = {}
+    for item in sections:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if key in CHAPTER1_SPEC_MAP and key not in section_map:
+            section_map[key] = item
+
     slots: List[str] = []
     for spec in CHAPTER1_SECTION_SPECS:
         key = spec["key"]
-        section = next((item for item in sections if item.get("key") == key), None)
+        section = section_map.get(key)
         if section is None:
             slots.extend([PLACEHOLDER_TEXT] * spec["slot_count"])
             continue
@@ -1052,35 +1140,87 @@ def _ensure_supply_chain_subsections(paragraphs: Sequence[str]) -> List[str]:
     result: List[str] = []
     indexed: Dict[int, str] = {}
     unlabeled: List[str] = []
+    expanded_paragraphs: List[str] = []
     for raw in paragraphs:
-        text = str(raw or "").strip()
-        if not text:
-            continue
+        expanded_paragraphs.extend(_split_supply_chain_paragraph(str(raw or "").strip()))
+
+    for text in expanded_paragraphs:
         match = re.match(r"^[（(]([一二三四五12345])[）)]", text)
         if match:
             token = match.group(1)
             index_map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5}
             idx = index_map.get(token)
             if idx and idx not in indexed:
-                indexed[idx] = text
+                indexed[idx] = _normalize_supply_chain_content(text, topic=SUPPLY_CHAIN_SUBTOPICS[idx - 1])
                 continue
         unlabeled.append(text)
 
-    cn_idx = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五"}
+    intro = unlabeled.pop(0) if unlabeled else ""
+    if not intro:
+        intro = (
+            "该行业供应链覆盖上游原材料与核心零部件、中游制造与装配、下游应用与渠道协同等关键环节，"
+            "各环节通过质量、交付与成本管理形成整体竞争力。"
+        )
+    result.append(intro)
+
     for idx, topic in enumerate(SUPPLY_CHAIN_SUBTOPICS, start=1):
         if idx in indexed:
             result.append(indexed[idx])
             continue
         if unlabeled:
-            base = unlabeled.pop(0)
-            result.append(f"（{cn_idx[idx]}）{topic}：{base}")
+            result.append(_normalize_supply_chain_content(unlabeled.pop(0), topic=topic))
         else:
             result.append(
-                f"（{cn_idx[idx]}）{topic}：该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
+                f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
             )
 
     result.extend(unlabeled)
     return result
+
+
+def _split_supply_chain_paragraph(text: str) -> List[str]:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return []
+    marker_pattern = r"[（(][一二三四五12345][）)]"
+    marker_matches = list(re.finditer(marker_pattern, cleaned))
+    if len(marker_matches) <= 1:
+        return [cleaned]
+
+    result: List[str] = []
+    prefix = cleaned[: marker_matches[0].start()].strip(" ；;，,")
+    if prefix:
+        result.append(prefix)
+    for idx, marker in enumerate(marker_matches):
+        start = marker.start()
+        end = marker_matches[idx + 1].start() if idx + 1 < len(marker_matches) else len(cleaned)
+        part = cleaned[start:end].strip(" ；;，,")
+        if part:
+            result.append(part)
+    return result
+
+
+def _normalize_supply_chain_content(text: str, *, topic: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
+
+    # 去掉“（一）”“（二）”等编号，避免与模板固定小标题冲突。
+    normalized = re.sub(r"^[（(][一二三四五12345][）)]\s*", "", normalized)
+    # 去掉可能重复的“上游原材料与核心零部件”等小标题。
+    normalized = re.sub(rf"^{re.escape(topic)}\s*[:：]?", "", normalized)
+
+    if "：" in normalized:
+        head, body = normalized.split("：", 1)
+        if body.strip():
+            return f"{head}：{body.strip()}"
+    if ":" in normalized:
+        head, body = normalized.split(":", 1)
+        if body.strip():
+            return f"{head}：{body.strip()}"
+    if normalized.strip():
+        return normalized.strip()
+    return f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
 
 
 def _find_best_split_index(paragraphs: Sequence[str]) -> int | None:
