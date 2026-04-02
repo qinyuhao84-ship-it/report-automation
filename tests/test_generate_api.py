@@ -50,12 +50,18 @@ def build_other_payload() -> dict:
                     "name": "来源1",
                     "url": "https://example.com/market-1",
                     "chart_title": "图表1",
+                    "chart_2023": "444.48",
+                    "chart_2024": "463.15",
+                    "chart_2025": "482.6",
                     "analysis": "这一层市场规模按照行业研究资料测算。",
                 },
                 {
                     "name": "来源2",
                     "url": "https://example.com/market-2",
                     "chart_title": "图表2",
+                    "chart_2023": "222.1",
+                    "chart_2024": "240.8",
+                    "chart_2025": "258.3",
                     "analysis": "这一层进一步缩小到目标产品的市场口径。",
                 },
             ],
@@ -123,6 +129,20 @@ def test_other_chapter1_endpoint_returns_sections(monkeypatch):
     body = resp.json()
     assert body["sections"][0]["key"] == "background_overview"
     assert body["warnings"] == ["第一章部分段落不足，已补齐占位内容"]
+
+
+def test_other_chapter1_endpoint_returns_504_on_timeout(monkeypatch):
+    client = TestClient(app_module.app)
+
+    def fake_generate_other_chapter1(_product_name, _config):
+        raise app_module.OtherProofTimeoutError("第一章生成超时。你可以直接重试，或勾选“第一章失败后跳过继续生成”。")
+
+    monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
+
+    resp = client.post("/other-proof/chapter1", json={"product_name": "示例产品"})
+
+    assert resp.status_code == 504
+    assert "第一章生成超时" in resp.json().get("detail", "")
 
 
 def test_rewrite_header_titles_updates_matching_header_paragraph():
@@ -223,6 +243,28 @@ def test_generate_other_requires_confirmed_profiles(monkeypatch, tmp_path: Path)
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "请先填写第三章企业基本信息"
+
+
+def test_generate_self_requires_chart_data(monkeypatch, tmp_path: Path):
+    client = TestClient(app_module.app)
+    payload = build_payload()
+    payload["template_type"] = "self"
+    payload["sources"] = [
+        {
+            "name": "来源1",
+            "url": "https://example.com/market-1",
+            "chart_title": "图表1：测试",
+            "chart_2023": "",
+            "chart_2024": "463.15",
+            "chart_2025": "482.6",
+            "analysis": "测试",
+        }
+    ]
+
+    resp = client.post("/generate", json=payload)
+
+    assert resp.status_code == 400
+    assert "缺少 2023 年市场规模" in resp.json()["detail"]
 
 
 def test_generate_other_requires_complete_manual_company_profiles(monkeypatch, tmp_path: Path):

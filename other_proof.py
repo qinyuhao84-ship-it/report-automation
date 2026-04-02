@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Sequence
 
 import httpx
 
+from chart_docx import (
+    ChartDataError,
+    build_chart_series_from_sources,
+    inject_market_charts_into_docx,
+)
 from inference import InferenceConfig, LLMOrchestrator
 
 def _register_all_namespaces(xml_content):
@@ -70,6 +75,10 @@ class OtherProofError(RuntimeError):
     pass
 
 
+class OtherProofTimeoutError(OtherProofError):
+    pass
+
+
 def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[str, Any]:
     if not product_name or not product_name.strip():
         raise OtherProofError("主导产品名称不能为空")
@@ -79,26 +88,55 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
         raise OtherProofError("LLM 未配置，无法生成他证第一章")
 
     prompt = _build_chapter1_prompt(product_name.strip())
-    raw = orchestrator.client.complete(
-        [
-            {
-                "role": "system",
-                "content": (
-                    "你是产业研究分析师。"
-                    "严格按用户给定结构生成内容。"
-                    "只输出 JSON，不要输出解释，不要输出 Markdown 代码块。"
-                    "不得编造企业私有信息。"
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.2,
-        max_output_tokens=max(config.llm_max_output_tokens, 8000),
-    )
+    chapter1_messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是产业研究分析师。"
+                "严格按用户给定结构生成内容。"
+                "只输出 JSON，不要输出解释，不要输出 Markdown 代码块。"
+                "不得编造企业私有信息。"
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    chapter1_max_tokens = max(config.llm_max_output_tokens, 5200)
+    timeout_seconds = max(config.llm_timeout_seconds, 120)
+    retry_attempts = max(1, min(config.llm_retry_attempts + 1, 3))
+
+    last_timeout_error: Exception | None = None
+    raw = ""
+    for attempt in range(retry_attempts):
+        try:
+            raw = orchestrator.client.complete(
+                chapter1_messages,
+                temperature=0.2,
+                max_output_tokens=chapter1_max_tokens,
+                timeout_seconds=timeout_seconds,
+            )
+            last_timeout_error = None
+            break
+        except Exception as exc:
+            if _is_timeout_error(exc):
+                last_timeout_error = exc
+                continue
+            raise
+
+    if last_timeout_error is not None:
+        raise OtherProofTimeoutError(
+            "第一章生成超时。你可以直接重试，或勾选“第一章失败后跳过继续生成”。"
+        ) from last_timeout_error
 
     parsed = _extract_json_payload(raw)
     normalized, warnings = normalize_chapter1_sections(parsed.get("sections"))
     return {"sections": normalized, "warnings": warnings}
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    text = str(exc).strip().lower()
+    return "timed out" in text or "timeout" in text
 
 
 
@@ -177,8 +215,14 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
     if not market_name:
         raise OtherProofError("测算市场名称不能为空")
 
+    raw_sources = [source for source in (data.get("sources") or []) if isinstance(source, dict)]
+    try:
+        chart_series = build_chart_series_from_sources(raw_sources, context_label="数据来源")
+    except ChartDataError as exc:
+        raise OtherProofError(str(exc)) from exc
+
     raw_chapter2_layers = [layer for layer in (data.get("chapter2_layers") or []) if isinstance(layer, dict)]
-    chapter2_layers = _bind_other_layers_to_sources(raw_chapter2_layers, data.get("sources") or [])
+    chapter2_layers = _bind_other_layers_to_sources(raw_chapter2_layers, raw_sources)
     if not chapter2_layers:
         raise OtherProofError("第二章市场层级不能为空")
 
@@ -248,6 +292,15 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
         company_name=self_row["display_name"],
         product_name=str(data.get("product_name") or "").strip(),
     )
+    try:
+        inject_market_charts_into_docx(
+            document_root=root,
+            file_map=file_map,
+            chart_series=chart_series,
+            context_label="他证",
+        )
+    except ChartDataError as exc:
+        raise OtherProofError(str(exc)) from exc
 
     file_map["word/document.xml"] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -262,9 +315,9 @@ def _bind_other_layers_to_sources(
     sources: Sequence[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     normalized_sources = [source for source in sources if isinstance(source, dict)]
-    if len(normalized_sources) < len(chapter2_layers):
+    if len(normalized_sources) != len(chapter2_layers):
         raise OtherProofError(
-            f"自证来源层数不足：他证第二章共 {len(chapter2_layers)} 层，但数据来源只有 {len(normalized_sources)} 层"
+            f"自证来源层数与他证层级不一致：第二章共 {len(chapter2_layers)} 层，但数据来源有 {len(normalized_sources)} 层"
         )
 
     bound_layers: List[Dict[str, Any]] = []
@@ -281,7 +334,16 @@ def _bind_other_layers_to_sources(
         if not url:
             raise OtherProofError(f"自证第 {index} 层来源链接不能为空")
 
-        bound_layers.append({"name": layer_name, "analysis": analysis, "url": url})
+        bound_layers.append(
+            {
+                "name": layer_name,
+                "analysis": analysis,
+                "url": url,
+                "chart_2023": str(source.get("chart_2023") or "").strip(),
+                "chart_2024": str(source.get("chart_2024") or "").strip(),
+                "chart_2025": str(source.get("chart_2025") or "").strip(),
+            }
+        )
     return bound_layers
 
 

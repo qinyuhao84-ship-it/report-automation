@@ -12,6 +12,11 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
+from chart_docx import (
+    ChartDataError,
+    build_chart_series_from_sources,
+    inject_market_charts_into_docx,
+)
 from inference import (
     CancelTaskResponse,
     CreateTaskResponse,
@@ -24,6 +29,7 @@ from inference import (
 )
 from other_proof import (
     OtherProofError,
+    OtherProofTimeoutError,
     generate_other_chapter1,
     generate_other_docx,
     lookup_other_companies,
@@ -127,11 +133,29 @@ def rewrite_summary_market_research_phrase(tree: ET.Element, product_name: str) 
             for ot in other.findall('./w:t', namespaces=NS):
                 ot.text = ""
 
+
+def set_paragraph_text(p: ET.Element, value: str) -> None:
+    runs = p.findall('./w:r', namespaces=NS)
+    if not runs:
+        return
+    first = runs[0]
+    ts = first.findall('./w:t', namespaces=NS)
+    t = ts[0] if ts else ET.SubElement(first, f"{{{NS['w']}}}t")
+    for ex in ts[1:]:
+        first.remove(ex)
+    t.text = value
+    for other in runs[1:]:
+        for ot in other.findall('./w:t', namespaces=NS):
+            ot.text = ""
+
 class SourceBlock(BaseModel):
     name: str
     url: str
     chart_title: str
     analysis: str
+    chart_2023: str = ""
+    chart_2024: str = ""
+    chart_2025: str = ""
 
 class Competitor(BaseModel):
     name: str
@@ -228,6 +252,16 @@ def generate_docx_v4(data: dict, template_path, output_path):
 
     # 3. Structural duplication or deletion
     srcs = data.get("sources", [])
+    comp_data = data.get("competitors", [])
+    company_name = str(data.get("company_name", "")).strip()
+    named_competitors = [
+        c for c in comp_data
+        if str(c.get("name", "")).strip() and str(c.get("name", "")).strip() != company_name
+    ]
+    try:
+        chart_series = build_chart_series_from_sources(srcs, context_label="数据来源")
+    except ChartDataError as exc:
+        raise OtherProofError(str(exc)) from exc
     num_sources = len(srcs)
     
     body = tree.find(f".//{{{NS['w']}}}body")
@@ -258,6 +292,8 @@ def generate_docx_v4(data: dict, template_path, output_path):
             # ET.fromstring effectively re-parses if we needed to, but we just modified it in place!
         except Exception as e:
             print("Structural modification failed, proceeding with mapping. Error:", e)
+    if body is not None:
+        _apply_self_sales_table_structure(body, company_total=1 + len(named_competitors))
 
     # 4. Construct flat values list based on modified structure
     vals = []
@@ -302,8 +338,7 @@ def generate_docx_v4(data: dict, template_path, output_path):
         f"2025 年：（{data.get('sale_25', '')}/{data.get('total_mkt_25', '')}）*100%≈{data.get('pct_25', '')}"
     ])
     
-    comp_data = data.get("competitors", [])
-    c_names = [c["name"] for c in comp_data if c.get("name") and c["name"] != data.get("company_name", "")]
+    c_names = [str(c["name"]).strip() for c in named_competitors]
     vals.append("、".join(c_names))
     
     vals.extend([
@@ -325,8 +360,7 @@ def generate_docx_v4(data: dict, template_path, output_path):
             return f"{m * p:.2f}"
         except: return "0.00"
 
-    for i in range(4):
-        c = comp_data[i] if i < len(comp_data) else {"name": "", "p23": "", "p24": "", "p25": ""}
+    for c in named_competitors:
         vals.extend([
             c["name"],
             calc_sale(data.get("total_mkt_23", ""), c["p23"]), c["p23"],
@@ -382,9 +416,87 @@ def generate_docx_v4(data: dict, template_path, output_path):
         product_name=str(data.get("product_name", "")).strip(),
     )
     rewrite_summary_market_research_phrase(tree, str(data.get("product_name", "")).strip())
+    _rewrite_self_dynamic_chart_references(tree, source_count=num_sources)
+    try:
+        inject_market_charts_into_docx(
+            document_root=tree,
+            file_map=file_map,
+            chart_series=chart_series,
+            context_label="自证",
+        )
+    except ChartDataError as exc:
+        raise OtherProofError(str(exc)) from exc
     file_map["word/document.xml"] = ET.tostring(tree, encoding='utf-8', xml_declaration=True)
     with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
         for n, d in file_map.items(): zout.writestr(n, d)
+
+
+def _apply_self_sales_table_structure(body: ET.Element, *, company_total: int) -> None:
+    if company_total < 1:
+        raise OtherProofError("企业数量异常，至少需要 1 家企业")
+
+    target_table = None
+    for child in list(body):
+        if child.tag != f"{{{NS['w']}}}tbl":
+            continue
+        rows = child.findall("./w:tr", namespaces=NS)
+        if len(rows) < 3:
+            continue
+        first_row_text = "".join(t.text or "" for t in rows[0].findall(".//w:t", namespaces=NS))
+        second_row_text = "".join(t.text or "" for t in rows[1].findall(".//w:t", namespaces=NS))
+        if "企业名称" in first_row_text and "2023年" in first_row_text and "销售额（万元）" in second_row_text:
+            target_table = child
+            break
+
+    if target_table is None:
+        raise OtherProofError("模板缺少“2023~2025主要企业全国销售额情况”表格")
+
+    rows = target_table.findall("./w:tr", namespaces=NS)
+    data_rows = rows[2:]
+    if not data_rows:
+        raise OtherProofError("主要企业销售额表格结构异常")
+
+    if company_total < len(data_rows):
+        for row in data_rows[company_total:]:
+            target_table.remove(row)
+    elif company_total > len(data_rows):
+        template_row = data_rows[-1]
+        for _ in range(company_total - len(data_rows)):
+            target_table.append(copy.deepcopy(template_row))
+
+
+def _rewrite_self_dynamic_chart_references(tree: ET.Element, *, source_count: int) -> None:
+    comparison_chart_no = source_count + 1
+    share_chart_no = source_count + 2
+
+    for p in tree.findall(f".//{{{NS['w']}}}p"):
+        text = get_text(p)
+        if not text:
+            continue
+
+        if "市场规模以及各企业2023年-2025年产品销售额如图表" in text and "占有率如图表" in text:
+            replace_order = [comparison_chart_no, share_chart_no]
+            counter = {"i": 0}
+
+            def _replace(match):
+                idx = counter["i"]
+                counter["i"] += 1
+                if idx < len(replace_order):
+                    return f"图表{replace_order[idx]}"
+                return match.group(0)
+
+            updated = re.sub(r"图表\s*\d+", _replace, text)
+            set_paragraph_text(p, updated)
+            continue
+
+        if text.startswith("图表") and "主要企业全国销售额情况" in text:
+            updated = re.sub(r"^图表\s*\d+", f"图表 {comparison_chart_no}", text, count=1)
+            set_paragraph_text(p, updated)
+            continue
+
+        if text.startswith("图表") and "占有率情况" in text:
+            updated = re.sub(r"^图表\s*\d+", f"图表 {share_chart_no}", text, count=1)
+            set_paragraph_text(p, updated)
 
 app = FastAPI()
 
@@ -444,6 +556,8 @@ def update_inference_config(patch: InferConfigPatch):
 def generate_other_proof_chapter1_api(payload: Chapter1Request):
     try:
         return generate_other_chapter1(payload.product_name, inference_task_manager.get_config())
+    except OtherProofTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc))
     except OtherProofError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

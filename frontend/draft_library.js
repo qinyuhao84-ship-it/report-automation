@@ -5,11 +5,9 @@
   }
   root.ReportDraftLibrary = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
-  const DB_NAME = "report_automation_drafts_v1";
+  const DB_NAME = "report_automation_versions_v2";
   const DB_VERSION = 1;
   const STORE_NAME = "drafts";
-  const DEFAULT_UNNAMED_COMPANY = "__UNNAMED_COMPANY__";
-  const MAX_VERSION_NO = 10;
 
   function cloneSnapshot(value) {
     if (typeof structuredClone === "function") {
@@ -20,30 +18,32 @@
 
   function normalizeCompanyName(rawCompanyName) {
     const text = String(rawCompanyName || "").trim();
-    return text || DEFAULT_UNNAMED_COMPANY;
+    if (!text) {
+      throw new Error("企业名称不能为空");
+    }
+    return text;
   }
 
   function toDisplayCompanyName(rawCompanyName) {
-    const normalized = normalizeCompanyName(rawCompanyName);
-    if (normalized === DEFAULT_UNNAMED_COMPANY) {
-      return "未填写企业名";
-    }
-    return normalized;
+    const text = String(rawCompanyName || "").trim();
+    return text || "未选择企业";
   }
 
   function normalizeVersionNo(versionNo) {
     const parsed = Number(versionNo);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_VERSION_NO) {
-      throw new Error(`版本号必须在 1 到 ${MAX_VERSION_NO} 之间`);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw new Error("版本号必须是大于等于 1 的整数");
     }
     return parsed;
   }
 
   function makeDraftId(companyName, kind, versionNo) {
+    if (kind !== "version") {
+      throw new Error("仅支持版本草稿");
+    }
     const normalizedCompany = normalizeCompanyName(companyName);
-    const normalizedKind = kind === "version" ? "version" : "working";
-    const normalizedVersionNo = normalizedKind === "version" ? normalizeVersionNo(versionNo) : 0;
-    return `${encodeURIComponent(normalizedCompany)}::${normalizedKind}::${normalizedVersionNo}`;
+    const normalizedVersionNo = normalizeVersionNo(versionNo);
+    return `${encodeURIComponent(normalizedCompany)}::version::${normalizedVersionNo}`;
   }
 
   class IndexedDbDraftStore {
@@ -169,49 +169,36 @@
       }
     }
 
-    _createRecord(companyName, kind, versionNo, snapshot, savedTs) {
+    _createRecord(companyName, versionNo, snapshot, savedTs) {
       if (!snapshot || typeof snapshot !== "object") {
         throw new Error("草稿数据格式不正确");
       }
       const normalizedCompanyName = normalizeCompanyName(companyName);
-      const normalizedKind = kind === "version" ? "version" : "working";
-      const normalizedVersionNo = normalizedKind === "version" ? normalizeVersionNo(versionNo) : 0;
+      const normalizedVersionNo = normalizeVersionNo(versionNo);
       const normalizedSavedTs = Number(savedTs) > 0 ? Number(savedTs) : this.now();
 
       return {
-        id: makeDraftId(normalizedCompanyName, normalizedKind, normalizedVersionNo),
+        id: makeDraftId(normalizedCompanyName, "version", normalizedVersionNo),
         companyName: normalizedCompanyName,
-        kind: normalizedKind,
+        kind: "version",
         versionNo: normalizedVersionNo,
         snapshot: cloneSnapshot(snapshot),
         savedTs: normalizedSavedTs,
       };
     }
 
-    async saveWorkingDraft(companyName, snapshot, savedTs) {
-      const record = this._createRecord(companyName, "working", 0, snapshot, savedTs);
-      await this.store.put(record);
-      return record;
-    }
-
     async saveVersionDraft(companyName, versionNo, snapshot, savedTs) {
-      const normalizedCompanyName = normalizeCompanyName(companyName);
-      if (normalizedCompanyName === DEFAULT_UNNAMED_COMPANY) {
-        throw new Error("请先填写企业名称，再保留版本");
-      }
-      const record = this._createRecord(normalizedCompanyName, "version", versionNo, snapshot, savedTs);
+      const record = this._createRecord(companyName, versionNo, snapshot, savedTs);
       await this.store.put(record);
       return record;
     }
 
-    async getDraft(companyName, kind, versionNo = 0) {
+    async getDraft(companyName, kind, versionNo) {
+      if (kind !== "version") {
+        throw new Error("仅支持读取版本草稿");
+      }
       const id = makeDraftId(companyName, kind, versionNo);
       return this.store.get(id);
-    }
-
-    async clearWorkingDraft(companyName) {
-      const id = makeDraftId(companyName, "working", 0);
-      await this.store.delete(id);
     }
 
     async deleteVersionDraft(companyName, versionNo) {
@@ -233,12 +220,9 @@
       const normalizedCompanyName = normalizeCompanyName(companyName);
       const all = await this.store.getAll();
       return all
-        .filter((item) => item.companyName === normalizedCompanyName)
+        .filter((item) => item.companyName === normalizedCompanyName && item.kind === "version")
         .sort((a, b) => {
-          if (a.kind !== b.kind) {
-            return a.kind === "working" ? -1 : 1;
-          }
-          if (a.kind === "version") {
+          if (a.versionNo !== b.versionNo) {
             return a.versionNo - b.versionNo;
           }
           return b.savedTs - a.savedTs;
@@ -247,21 +231,16 @@
 
     async listCompanies() {
       const all = await this.store.getAll();
+      const versionRecords = all.filter((item) => item.kind === "version");
       const grouped = new Map();
-      for (const item of all) {
+      for (const item of versionRecords) {
         const previous = grouped.get(item.companyName) || {
           companyName: item.companyName,
           latestTs: 0,
-          hasWorking: false,
           versionCount: 0,
         };
         previous.latestTs = Math.max(previous.latestTs, Number(item.savedTs) || 0);
-        if (item.kind === "working") {
-          previous.hasWorking = true;
-        }
-        if (item.kind === "version") {
-          previous.versionCount += 1;
-        }
+        previous.versionCount += 1;
         grouped.set(item.companyName, previous);
       }
       return Array.from(grouped.values()).sort((a, b) => {
@@ -272,18 +251,11 @@
       });
     }
 
-    async migrateLegacySnapshot(snapshot) {
-      if (!snapshot || typeof snapshot !== "object") {
-        return { migrated: false, reason: "legacy_empty" };
-      }
-      const savedTs = Number(snapshot.saved_ts) > 0 ? Number(snapshot.saved_ts) : this.now();
-      const companyName = normalizeCompanyName(snapshot.company_name || "");
-      await this.saveWorkingDraft(companyName, snapshot, savedTs);
-      return {
-        migrated: true,
-        companyName,
-        savedTs,
-      };
+    async getNextVersionNo(companyName) {
+      const items = await this.listCompanyDrafts(companyName);
+      if (!items.length) return 1;
+      const maxVersionNo = Math.max(...items.map((item) => Number(item.versionNo) || 0));
+      return maxVersionNo + 1;
     }
   }
 
@@ -298,8 +270,6 @@
     DB_NAME,
     DB_VERSION,
     STORE_NAME,
-    MAX_VERSION_NO,
-    DEFAULT_UNNAMED_COMPANY,
     normalizeCompanyName,
     toDisplayCompanyName,
     makeDraftId,
