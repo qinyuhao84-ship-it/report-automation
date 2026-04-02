@@ -231,6 +231,7 @@ class OpenAICompatibleClient:
         model: Optional[str] = None,
         temperature: float = 0.0,
         max_output_tokens: Optional[int] = None,
+        timeout_seconds: Optional[int] = None,
     ) -> str:
         payload = {
             "model": model or self.model,
@@ -243,7 +244,13 @@ class OpenAICompatibleClient:
             "Content-Type": "application/json",
             "User-Agent": self.user_agent,
         }
-        response = self._client.post(f"{self.api_base}/chat/completions", json=payload, headers=headers)
+        request_timeout = httpx.Timeout(timeout_seconds) if timeout_seconds else None
+        response = self._client.post(
+            f"{self.api_base}/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=request_timeout,
+        )
         response.raise_for_status()
         try:
             body = response.json()
