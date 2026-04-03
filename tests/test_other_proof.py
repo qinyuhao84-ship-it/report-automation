@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
+import httpx
 import other_proof
 from other_proof import (
     _build_chart_number_plan,
@@ -14,6 +15,7 @@ from other_proof import (
     _set_paragraph_text,
     _validate_manual_company_profiles,
     _ensure_supply_chain_subsections,
+    generate_other_chapter1,
     lookup_other_companies,
     normalize_chapter1_sections,
 )
@@ -22,10 +24,204 @@ from other_proof import (
 def test_chapter1_prompt_uses_report_style_requirements():
     prompt = _build_chapter1_prompt("桥梁防撞主动预警系统以及多级消能防撞装置")
 
-    assert "2800-3200 字" in prompt
+    assert "900-1200 字" in prompt
     assert "行业研究报告" in prompt
     assert "禁止输出“总体工作原理”“机械自锁结构”这类孤立小标题或短语" in prompt
     assert "industry_supply_chain 必须包含“（一）到（五）”五个小分类" in prompt
+
+
+def test_generate_other_chapter1_caps_request_budget(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, messages, **kwargs):
+            self.calls.append({"messages": messages, "kwargs": kwargs})
+            return json_payload
+
+    class FakeOrchestrator:
+        def __init__(self, client):
+            self.client = client
+
+        def is_available(self):
+            return True
+
+    json_payload = (
+        '{"sections":['
+        '{"key":"background_overview","title":"背景与概述","paragraphs":["背景段落"]},'
+        '{"key":"definition","title":"定义","paragraphs":["定义段落"]},'
+        '{"key":"working_principle","title":"工作原理","paragraphs":["工作原理段落"]},'
+        '{"key":"product_attributes","title":"产品属性","paragraphs":["属性段落"]},'
+        '{"key":"technical_specifications","title":"技术规范","paragraphs":["规范段落"]},'
+        '{"key":"industry_history","title":"行业发展历程","paragraphs":["历程段落"]},'
+        '{"key":"industry_environment","title":"行业发展环境","paragraphs":["环境段落"]},'
+        '{"key":"industry_trends","title":"行业发展趋势","paragraphs":["趋势段落"]},'
+        '{"key":"industry_supply_chain","title":"行业供应链","paragraphs":["（一）上游","（二）中游","（三）下游","（四）渠道","（五）风险"]}'
+        ']}'
+    )
+    fake_client = FakeClient()
+
+    def fake_from_config(_config):
+        return FakeOrchestrator(fake_client)
+
+    monkeypatch.setattr(other_proof.LLMOrchestrator, "from_config", staticmethod(fake_from_config))
+
+    config = other_proof.InferenceConfig(
+        llm_timeout_seconds=300,
+        llm_max_output_tokens=8192,
+        llm_retry_attempts=5,
+    )
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", config)
+
+    assert len(result["sections"]) == 9
+    assert fake_client.calls, "LLM client should be called"
+    kwargs = fake_client.calls[0]["kwargs"]
+    assert kwargs["timeout_seconds"] == 45
+    assert kwargs["max_output_tokens"] == 2600
+
+
+def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
+    class FakeClient:
+        def complete(self, *_args, **_kwargs):
+            raise httpx.RemoteProtocolError("peer closed connection")
+
+    class FakeOrchestrator:
+        def __init__(self):
+            self.client = FakeClient()
+
+        def is_available(self):
+            return True
+
+    monkeypatch.setattr(
+        other_proof.LLMOrchestrator,
+        "from_config",
+        staticmethod(lambda _config: FakeOrchestrator()),
+    )
+
+    try:
+        generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
+    except other_proof.OtherProofTimeoutError as exc:
+        assert "第一章生成超时" in str(exc)
+    else:
+        raise AssertionError("expected OtherProofTimeoutError")
+
+
+def test_generate_other_chapter1_uses_fast_mode_after_timeout(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+            self.count = 0
+
+        def complete(self, messages, **kwargs):
+            self.calls.append({"messages": messages, "kwargs": kwargs})
+            self.count += 1
+            if self.count <= 2:
+                raise httpx.ReadTimeout("timed out")
+            return (
+                '{"sections":['
+                '{"key":"background_overview","title":"背景与概述","paragraphs":["背景段落"]},'
+                '{"key":"definition","title":"定义","paragraphs":["定义段落"]},'
+                '{"key":"working_principle","title":"工作原理","paragraphs":["工作原理段落"]},'
+                '{"key":"product_attributes","title":"产品属性","paragraphs":["属性段落"]},'
+                '{"key":"technical_specifications","title":"技术规范","paragraphs":["规范段落"]},'
+                '{"key":"industry_history","title":"行业发展历程","paragraphs":["历程段落"]},'
+                '{"key":"industry_environment","title":"行业发展环境","paragraphs":["环境段落"]},'
+                '{"key":"industry_trends","title":"行业发展趋势","paragraphs":["趋势段落"]},'
+                '{"key":"industry_supply_chain","title":"行业供应链","paragraphs":["（一）上游 （二）中游 （三）下游 （四）渠道 （五）风险"]}'
+                ']}'
+            )
+
+    class FakeOrchestrator:
+        def __init__(self, client):
+            self.client = client
+
+        def is_available(self):
+            return True
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(
+        other_proof.LLMOrchestrator,
+        "from_config",
+        staticmethod(lambda _config: FakeOrchestrator(fake_client)),
+    )
+
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
+
+    assert len(result["sections"]) == 9
+    assert any("快速模式" in item for item in result["warnings"])
+    assert len(fake_client.calls) == 3
+    assert fake_client.calls[2]["kwargs"]["max_output_tokens"] == 900
+    assert fake_client.calls[2]["kwargs"]["timeout_seconds"] == 20
+
+
+def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatch):
+    plain_text = """
+一、背景与概述
+该产品面向高可靠连接场景，强调在复杂工况下的稳定供电与连接安全。
+
+二、基本概念
+（一）定义
+高安全性自锁紧型电源连接系统，是通过自锁结构与防误插设计保障连接稳定性的电源连接方案。
+
+（二）工作原理
+系统通过插拔配合、自锁保持与防松脱结构，维持长期电气连接稳定。
+
+（三）产品属性
+产品具备高防护等级、抗振动和长寿命等属性。
+
+（四）技术规范
+设计遵循电气安全与连接器相关标准体系。
+
+三、行业发展历程
+行业经历了从通用连接向高可靠、高安全方向持续升级。
+
+四、行业发展环境和趋势
+（一）行业发展环境
+新能源和高端制造场景扩张，推动高安全连接需求增长。
+
+（二）行业发展趋势
+产品形态向小型化、模块化和智能监测能力融合演进。
+
+五、行业供应链
+（一）上游原材料与核心零部件
+铜材、工程塑料与精密端子是关键投入。
+
+（二）中游制造与装配环节
+中游依赖精密加工与自动化装配能力。
+
+（三）下游应用行业与客户结构
+下游覆盖新能源装备、工业控制与轨道交通。
+
+（四）渠道流通与交付协同
+项目型客户更关注交付一致性与售后响应。
+
+（五）供应链风险与优化趋势
+供应链趋向多源化与本地化协同，降低交付风险。
+""".strip()
+
+    class FakeClient:
+        def complete(self, *_args, **_kwargs):
+            return plain_text
+
+    class FakeOrchestrator:
+        def __init__(self):
+            self.client = FakeClient()
+
+        def is_available(self):
+            return True
+
+    monkeypatch.setattr(
+        other_proof.LLMOrchestrator,
+        "from_config",
+        staticmethod(lambda _config: FakeOrchestrator()),
+    )
+
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
+    assert len(result["sections"]) == 9
+    assert any("非 JSON 文本" in item for item in result["warnings"])
+    section_map = {item["key"]: item for item in result["sections"]}
+    assert "高安全性自锁紧型电源连接系统" in section_map["definition"]["paragraphs"][0]
+    assert "供应链" in " ".join(section_map["industry_supply_chain"]["paragraphs"])
 
 
 def test_normalize_chapter1_sections_merges_heading_fragments():
