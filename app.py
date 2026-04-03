@@ -18,14 +18,7 @@ from chart_docx import (
     inject_market_charts_into_docx,
 )
 from inference import (
-    CancelTaskResponse,
-    CreateTaskResponse,
-    InferConfigPatch,
     InferenceConfig,
-    InferenceInput,
-    InferenceTaskManager,
-    TaskResult,
-    TaskStatus,
 )
 from other_proof import (
     OtherProofError,
@@ -512,50 +505,11 @@ app.add_middleware(
 TEMPLATE_PATH = "0315-浙江达航数据技术有限公司-自证-初版.docx"
 OTHER_TEMPLATE_PATH = "0323-高安全性自锁紧型电源连接系统市场占有率证明报告-初版.docx"
 
-inference_task_manager = InferenceTaskManager()
-
-
-@app.post("/infer-market-share", response_model=CreateTaskResponse, status_code=202)
-def submit_inference_task(payload: InferenceInput):
-    try:
-        return inference_task_manager.submit(payload)
-    except Exception:
-        raise HTTPException(status_code=500, detail="推理任务提交失败")
-
-
-@app.get("/infer-market-share/{task_id}", response_model=TaskResult)
-def get_inference_task(task_id: str):
-    task = inference_task_manager.get_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="推理任务不存在")
-    return task
-
-
-@app.post("/infer-market-share/{task_id}/cancel", response_model=CancelTaskResponse)
-def cancel_inference_task(task_id: str):
-    result = inference_task_manager.cancel(task_id)
-    if not result.accepted and result.status == TaskStatus.FAILED:
-        raise HTTPException(status_code=404, detail=result.message or "推理任务不存在")
-    return result
-
-
-@app.get("/infer-config", response_model=InferenceConfig)
-def get_inference_config():
-    return inference_task_manager.get_config()
-
-
-@app.put("/infer-config", response_model=InferenceConfig)
-def update_inference_config(patch: InferConfigPatch):
-    try:
-        return inference_task_manager.update_config(patch)
-    except Exception:
-        raise HTTPException(status_code=400, detail="配置更新失败，请检查参数")
-
 
 @app.post("/other-proof/chapter1")
 def generate_other_proof_chapter1_api(payload: Chapter1Request):
     try:
-        return generate_other_chapter1(payload.product_name, inference_task_manager.get_config())
+        return generate_other_chapter1(payload.product_name, InferenceConfig())
     except OtherProofTimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc))
     except OtherProofError as exc:

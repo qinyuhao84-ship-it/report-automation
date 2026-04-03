@@ -688,7 +688,7 @@
     <header class="topbar">
       <div class="brand">
         <h1>报告自动化助手</h1>
-        <p>先完成推理自动化，再一键生成模板 Word。已有模板自动化流程保持不变。</p>
+        <p>聚焦模板填报与一键生成 Word，推理流程已移除。</p>
       </div>
       <div class="top-actions" id="topActionsBar">
         <button id="createCompanyBtnTop" class="btn subtle top-btn top-create" type="button" onclick="onCreateCompanyClick()">新建企业</button>
@@ -716,7 +716,7 @@
         <div class="step-list">
           <div class="step-item"><strong>1. 基础资料</strong><small>企业信息、产品信息、市场范围</small></div>
           <div class="step-item"><strong>2. 经营数据</strong><small>三年销售额和市场规模</small></div>
-          <div class="step-item"><strong>3. 自动推理</strong><small>系统自动细分市场并给出规模结论</small></div>
+          <div class="step-item"><strong>3. 模板资料</strong><small>竞争对手与分层来源</small></div>
           <div class="step-item"><strong>4. 生成文档</strong><small>输出最终 Word</small></div>
         </div>
       </aside>
@@ -742,7 +742,7 @@
 
           <div class="grid-2" style="margin-top:10px;">
             <div class="field">
-              <label>市场范围（推理使用）</label>
+              <label>市场范围</label>
               <select id="target_scope">
                 <option value="CN">中国市场</option>
                 <option value="GLOBAL">全球市场</option>
@@ -764,7 +764,7 @@
               <textarea id="product_intro" placeholder="写主导产品定位、技术方案、性能优势与应用场景"></textarea>
             </div>
           </div>
-          <div class="section-note">系统将基于“企业介绍 + 产品介绍 + 产品名称”自动推断细分市场，不需要你手动填类别。</div>
+          <div class="section-note">用于模板生成的基础信息，请按实际情况填写。</div>
         </section>
 
         <section class="panel" id="step2">
@@ -772,7 +772,7 @@
             <h3>经营数据</h3>
             <span class="badge must">必填</span>
           </div>
-          <div class="warn-box">市场占有率按“销售额 / 市场规模”自动计算。推理完成后先写入最近财年市场规模，再按增长率回推 2023、2024 年市场规模。</div>
+          <div class="warn-box">市场占有率按“销售额 / 市场规模”自动计算。</div>
           <table>
             <thead>
               <tr>
@@ -807,48 +807,6 @@
               </tr>
             </tbody>
           </table>
-
-          <div class="buttons">
-            <button id="startInferenceBtn" class="btn inference-cta" type="button" onclick="runInference()">开始自动推理（核心步骤）</button>
-            <button id="stopInferenceBtn" class="btn danger" type="button" onclick="stopInference()" style="display:none;">停止推理</button>
-          </div>
-        </section>
-
-        <section class="panel" id="step3">
-          <div class="panel-head">
-            <h3>推理结果看板</h3>
-            <span class="badge opt">系统自动</span>
-          </div>
-
-          <div class="inference-grid">
-            <div class="metric"><div class="k">任务状态</div><div class="v" id="infStatus">未执行</div></div>
-            <div class="metric"><div class="k">证据分</div><div class="v" id="infScore">-</div></div>
-            <div class="metric"><div class="k">最近财年市占率</div><div class="v" id="infShare">-</div></div>
-            <div class="metric"><div class="k">路径层级</div><div class="v" id="infDepth">-</div></div>
-          </div>
-
-          <div class="status-board" id="infPath">细分路径：尚未生成</div>
-
-          <div class="log-wrap" style="margin-top:10px;">
-            <table>
-              <thead><tr><th>轮次</th><th>渠道</th><th>动作</th><th>说明</th></tr></thead>
-              <tbody id="attemptBody"><tr><td colspan="4" class="empty">暂无执行日志</td></tr></tbody>
-            </table>
-          </div>
-
-          <div class="log-wrap" style="margin-top:10px;">
-            <table>
-              <thead><tr><th>来源标题</th><th>来源链接</th><th>AI会话链接</th><th>原文核验</th><th>报告正文素材</th><th>换算过程</th></tr></thead>
-              <tbody id="evidenceBody"><tr><td colspan="6" class="empty">暂无证据条目</td></tr></tbody>
-            </table>
-          </div>
-
-          <div class="log-wrap" style="margin-top:10px;">
-            <table>
-              <thead><tr><th>计算步骤</th><th>结果</th></tr></thead>
-              <tbody id="calcBody"><tr><td colspan="2" class="empty">暂无测算过程</td></tr></tbody>
-            </table>
-          </div>
         </section>
 
         <section class="panel" id="step4">
@@ -952,24 +910,11 @@
     let autoSaveTimer = null;
     let lastSavedSnapshotText = "";
     let draftLibrary = null;
-    let lastInferenceTaskId = null;
-    let inferencePollTimer = null;
-    let inferencePolling = false;
     let otherProofChapter1Sections = [];
     const OTHER_CHAPTER1_CACHE_KEY = "report_other_chapter1_by_company_v1";
     let otherProofChapter1CacheByCompany = {};
     let otherProofResolvedProfiles = [];
     let otherProofPendingCompanies = [];
-
-    function setInferenceControls(running) {
-      const startBtn = document.getElementById("startInferenceBtn");
-      const stopBtn = document.getElementById("stopInferenceBtn");
-      if (startBtn) startBtn.disabled = !!running;
-      if (stopBtn) {
-        stopBtn.style.display = running ? "inline-block" : "none";
-        stopBtn.disabled = !running;
-      }
-    }
 
     function setStatus(text, mode) {
       const el = document.getElementById("status");
@@ -1926,426 +1871,6 @@
       }
     }
 
-    function isProviderUrl(rawUrl) {
-      const text = String(rawUrl || "").trim().toLowerCase();
-      if (!text) return false;
-      return text.includes("metaso.cn") || text.includes("yuanbao.tencent.com") || text.includes("doubao.com");
-    }
-
-    function chooseGrowthRate(finalData) {
-      const evidences = Array.isArray(finalData.evidence_chain) ? finalData.evidence_chain : [];
-      for (const e of evidences) {
-        const direct = Number(e.extracted_growth_rate);
-        if (Number.isFinite(direct) && direct > 0 && direct < 0.6) {
-          return { rate: direct, source: `证据提取：${e.title || "来源"}` };
-        }
-        const text = `${e.quote_text || ""} ${e.snippet || ""}`;
-        const match = text.match(/(?:复合年增长率|年复合增长率|CAGR|增长率)[^%0-9]{0,12}(\d{1,2}(?:\.\d+)?)\s*%/i);
-        if (!match) continue;
-        const n = Number(match[1]) / 100;
-        if (Number.isFinite(n) && n > 0 && n < 0.6) {
-          return { rate: n, source: `原文匹配：${e.title || "来源"}` };
-        }
-      }
-      return { rate: null, source: "未找到明确增长率原文，禁止假设增长率" };
-    }
-
-    function deriveMarketSeries(finalData) {
-      const latestYear = Number(finalData.latest_year || 2025);
-      const latestMarketSize = Number(finalData.market_size_latest_year_wan_cny || 0);
-      const growth = chooseGrowthRate(finalData);
-      const g = growth.rate;
-      const series = {};
-      [2023, 2024, 2025].forEach((year) => {
-        const yearDiff = latestYear - year;
-        if (!Number.isFinite(latestMarketSize) || latestMarketSize <= 0) {
-          series[year] = null;
-          return;
-        }
-        if (year === latestYear) {
-          series[year] = latestMarketSize;
-          return;
-        }
-        if (!(Number.isFinite(g) && g > 0 && g < 0.6)) {
-          series[year] = null;
-          return;
-        }
-        if (yearDiff >= 0) {
-          series[year] = latestMarketSize / Math.pow(1 + g, yearDiff);
-        } else {
-          series[year] = latestMarketSize * Math.pow(1 + g, -yearDiff);
-        }
-      });
-      return {
-        latestYear,
-        latestMarketSize,
-        growthRate: g,
-        growthSource: growth.source,
-        series,
-      };
-    }
-
-    function renderCalcLog(finalData, marketPlan) {
-      const body = document.getElementById("calcBody");
-      const rows = [];
-      const fx = Number(finalData.usd_cny_rate_used || 0);
-      const fxSource = finalData.usd_cny_rate_source || "未知来源";
-      if (Number.isFinite(fx) && fx > 0) {
-        rows.push(["汇率口径", `1 美元 = ${fx.toFixed(6)} 人民币（${fxSource}）`]);
-      }
-      if (Number.isFinite(marketPlan.growthRate)) {
-        rows.push(["增长率口径", `${(marketPlan.growthRate * 100).toFixed(2)}%（${marketPlan.growthSource}）`]);
-      } else {
-        rows.push(["增长率口径", `未采用默认值：${marketPlan.growthSource}`]);
-      }
-
-      const evidences = Array.isArray(finalData.evidence_chain) ? finalData.evidence_chain : [];
-      evidences.slice(0, 4).forEach((e, idx) => {
-        const quote = (e.quote_text || e.snippet || "-").slice(0, 120);
-        rows.push([`原文句 ${idx + 1}`, quote]);
-        if (e.conversion_formula) {
-          rows.push([`单位换算 ${idx + 1}`, e.conversion_formula]);
-        }
-      });
-
-      [2023, 2024, 2025].forEach((year) => {
-        const size = marketPlan.series[year];
-        const sale = safeNum(document.getElementById(`sale_${String(year).slice(-2)}`).value);
-        const pct = document.getElementById(`pct_${String(year).slice(-2)}`).value || "-";
-        if (size != null) {
-          rows.push([`${year} 市场规模回推`, `${size.toFixed(2)} 万元`]);
-        }
-        if (sale != null && size != null && size > 0) {
-          rows.push([`${year} 市占率计算`, `(${sale.toFixed(2)} / ${size.toFixed(2)}) × 100% = ${pct}`]);
-        }
-      });
-
-      if (!rows.length) {
-        body.innerHTML = '<tr><td colspan="2" class="empty">暂无测算过程</td></tr>';
-        return;
-      }
-      body.innerHTML = rows.map((row) => `
-        <tr>
-          <td style="text-align:left;">${row[0]}</td>
-          <td style="text-align:left;">${row[1]}</td>
-        </tr>
-      `).join("");
-    }
-
-    function applyInferenceMarketSize(finalData) {
-      const marketPlan = deriveMarketSeries(finalData);
-      [2023, 2024, 2025].forEach((year) => {
-        const suffix = String(year).slice(-2);
-        const field = document.getElementById(`total_mkt_${suffix}`);
-        const value = marketPlan.series[year];
-        if (!field) return;
-        if (value != null && Number.isFinite(value) && value > 0) {
-          field.value = value.toFixed(2);
-        } else if (year !== marketPlan.latestYear && !Number.isFinite(marketPlan.growthRate)) {
-          field.value = "";
-        }
-      });
-      ["23", "24", "25"].forEach(calcMyPct);
-      renderCalcLog(finalData, marketPlan);
-      return marketPlan;
-    }
-
-    function buildReportBody(finalData, marketPlan) {
-      const company = document.getElementById("company_name").value.trim();
-      const product = document.getElementById("product_name").value.trim();
-      const scope = document.getElementById("target_scope").value === "GLOBAL" ? "全球" : "中国";
-      const path = Array.isArray(finalData.final_market_path) && finalData.final_market_path.length
-        ? finalData.final_market_path.join(" → ")
-        : "未识别";
-      const fitLine = finalData.market_fit_reason
-        ? `主导产品与细分市场一致性结论：${finalData.market_fit_reason}（置信度 ${(Number(finalData.market_fit_confidence || 0) * 100).toFixed(0)}%）`
-        : "主导产品与细分市场一致性结论：系统未返回具体说明。";
-      const fxLine = Number(finalData.usd_cny_rate_used || 0) > 0
-        ? `单位换算口径：采用当日汇率 1 美元 = ${Number(finalData.usd_cny_rate_used).toFixed(6)} 人民币（${finalData.usd_cny_rate_source || "未知来源"}）。`
-        : "单位换算口径：采用系统默认人民币口径。";
-
-      const allEvidence = Array.isArray(finalData.evidence_chain) ? finalData.evidence_chain : [];
-      const verifiedCount = allEvidence.filter((e) => e.source_verified).length;
-      const unverifiedCount = Math.max(0, allEvidence.length - verifiedCount);
-      const verifySummary = `原文核验情况：已命中原文 ${verifiedCount} 条，未命中原文 ${unverifiedCount} 条。未命中条目已在来源中标注“LLM未在原文找到依据”。`;
-
-      const evidenceLines = allEvidence
-        .slice(0, 3)
-        .map((e, idx) => {
-          const verifyTag = e.source_verified ? "原文已核验" : "原文未核验";
-          return `来源${idx + 1}《${e.title || "未命名来源"}》（${verifyTag}）：${(e.quote_text || e.snippet || "未提取到原文句").slice(0, 140)}（${e.url || "无链接"}）`;
-        });
-
-      const p23 = document.getElementById("pct_23").value || "-";
-      const p24 = document.getElementById("pct_24").value || "-";
-      const p25 = document.getElementById("pct_25").value || "-";
-      const m23 = document.getElementById("total_mkt_23").value || "-";
-      const m24 = document.getElementById("total_mkt_24").value || "-";
-      const m25 = document.getElementById("total_mkt_25").value || "-";
-      const s23 = document.getElementById("sale_23").value || "-";
-      const s24 = document.getElementById("sale_24").value || "-";
-      const s25 = document.getElementById("sale_25").value || "-";
-
-      const body = [
-        "一、细分市场范围界定",
-        `我司主导产品为“${product}”。结合企业与产品技术特征，推理识别的细分市场路径为：${path}，统计口径为${scope}市场。`,
-        fitLine,
-        "",
-        "二、市场规模测算口径与数据来源",
-        ...evidenceLines,
-        verifySummary,
-        fxLine,
-        (Number.isFinite(marketPlan.growthRate)
-          ? `回推口径：按年增长率 ${(marketPlan.growthRate * 100).toFixed(2)}% 由最近财年市场规模向前回推（口径说明：${marketPlan.growthSource}）。`
-          : `回推口径：未找到明确增长率原文，未对历史年份做假设回推（${marketPlan.growthSource}）。`),
-        `据此测算，2023-2025 年细分市场规模分别为：${m23 || "待补充"}万元、${m24 || "待补充"}万元、${m25 || "待补充"}万元。`,
-        "",
-        "三、市场占有率测算结果",
-        `2023 年：（${s23}/${m23 || "待补充"}）×100%≈${p23 || "待补充"}`,
-        `2024 年：（${s24}/${m24 || "待补充"}）×100%≈${p24 || "待补充"}`,
-        `2025 年：（${s25}/${m25}）×100%≈${p25}`,
-        "结论：最近一年（2025 年）市场占有率达到申报目标阈值（10%）。",
-      ].join("\n");
-      document.getElementById("report_body").value = body;
-    }
-
-    function renderAttemptLog(attempts) {
-      const body = document.getElementById("attemptBody");
-      if (!Array.isArray(attempts) || attempts.length === 0) {
-        body.innerHTML = '<tr><td colspan="4" class="empty">暂无执行日志</td></tr>';
-        return;
-      }
-      body.innerHTML = attempts.slice(-12).map((a) => `
-        <tr>
-          <td>${a.round_index ?? "-"}</td>
-          <td>${a.provider ?? "-"}</td>
-          <td>${a.action ?? "-"}</td>
-          <td style="text-align:left;">${(a.reason || "").slice(0, 80)}</td>
-        </tr>
-      `).join("");
-    }
-
-    function renderEvidenceLog(evidence) {
-      const body = document.getElementById("evidenceBody");
-      if (!Array.isArray(evidence) || evidence.length === 0) {
-        body.innerHTML = '<tr><td colspan="6" class="empty">暂无证据条目</td></tr>';
-        return;
-      }
-      body.innerHTML = evidence.slice(0, 10).map((e) => `
-        <tr>
-          <td style="text-align:left;">${(e.title || "-").slice(0, 40)}</td>
-          <td style="text-align:left;"><a href="${e.url || '#'}" target="_blank" rel="noopener">${(e.url || "-").slice(0, 35)}</a></td>
-          <td style="text-align:left;">${e.search_page_url ? `<a href="${e.search_page_url}" target="_blank" rel="noopener">${String(e.search_page_url).slice(0, 30)}</a>` : "-"}</td>
-          <td>${e.source_verified ? "已找到原文依据" : "未找到原文依据（AI数据）"}</td>
-          <td style="text-align:left;">${(e.quote_text || e.snippet || "-").slice(0, 100)}</td>
-          <td style="text-align:left;">${(e.conversion_formula || "-").slice(0, 120)}</td>
-        </tr>
-      `).join("");
-    }
-
-    function renderInferenceResult(data) {
-      const status = data.status || "-";
-      const scorePct = Number(data.evidence_score || 0) * 100;
-      const sharePct = data.market_share_latest_year != null ? (Number(data.market_share_latest_year) * 100).toFixed(2) + "%" : "-";
-      const path = Array.isArray(data.final_market_path) ? data.final_market_path : [];
-
-      document.getElementById("infStatus").textContent = status;
-      document.getElementById("infScore").textContent = scorePct ? scorePct.toFixed(0) + " 分" : "-";
-      document.getElementById("infShare").textContent = sharePct;
-      document.getElementById("infDepth").textContent = path.length ? String(path.length) + " 层" : "-";
-      const fitText = data.market_fit_reason ? `；一致性：${data.market_fit_reason}` : "";
-      document.getElementById("infPath").textContent = "细分路径：" + (path.length ? path.join(" → ") : "未生成") + fitText;
-
-      renderAttemptLog(data.attempt_log || []);
-      renderEvidenceLog(data.evidence_chain || []);
-    }
-
-    function mapEvidenceToSources(evidenceList) {
-      if (!Array.isArray(evidenceList) || evidenceList.length === 0) return;
-      const originals = evidenceList.filter((e) => e && e.url && !isProviderUrl(e.url));
-      const selectedPool = originals.length ? originals : evidenceList;
-      const selected = [...selectedPool].sort((a, b) => Number(Boolean(b.source_verified)) - Number(Boolean(a.source_verified)));
-      const holder = document.getElementById("sources_list");
-      holder.innerHTML = "";
-      sourceCount = 0;
-      selected.slice(0, 5).forEach((e, idx) => {
-        const verifyLine = e.source_verified ? "原文核验：已找到依据。" : "原文核验：未找到完整原文依据，已标注人工复核。";
-        const sessionLine = e.search_page_url ? `AI会话网址：${e.search_page_url}` : "AI会话网址：未记录";
-        const paragraph = `在“${e.title || "未命名来源"}”中，${(e.quote_text || e.snippet || "未提取到有效原文句")}。`
-          + `基于该来源，系统提取市场相关数据并用于测算。${verifyLine}${sessionLine}`;
-        addSource({
-          name: e.title || `自动来源${idx + 1}`,
-          url: !isProviderUrl(e.url) ? (e.url || "") : "",
-          chart_title: `市场规模参考`,
-          chart_2023: "",
-          chart_2024: "",
-          chart_2025: "",
-          analysis: paragraph,
-        });
-      });
-    }
-
-    function isInferenceTerminal(status) {
-      return ["REACHED", "NOT_REACHED", "CANCELLED", "FAILED"].includes(status);
-    }
-
-    function clearInferencePoll() {
-      if (inferencePollTimer) {
-        clearTimeout(inferencePollTimer);
-        inferencePollTimer = null;
-      }
-      inferencePolling = false;
-    }
-
-    function finalizeInference(finalData) {
-      clearInferencePoll();
-      setInferenceControls(false);
-      if (finalData && finalData.status) {
-        renderInferenceResult(finalData);
-      }
-
-      if (!finalData) {
-        setStatus("未获取到推理结果，请重试", "error");
-        return;
-      }
-
-      if (finalData.status === "CANCELLED") {
-        lastInferenceTaskId = null;
-        saveDraft(true);
-        setStatus("推理已停止，你可以修改资料后重新发起");
-        return;
-      }
-
-      const marketPlan = applyInferenceMarketSize(finalData);
-      buildReportBody(finalData, marketPlan);
-      mapEvidenceToSources(finalData.evidence_chain || []);
-      saveDraft(true);
-      lastInferenceTaskId = null;
-
-      if (finalData.status === "REACHED") {
-        setStatus("推理完成：已达到目标阈值");
-      } else if (finalData.status === "NOT_REACHED") {
-        setStatus("推理完成：未达标，已返回当前最优候选");
-      } else {
-        setStatus("推理执行失败，请检查输入后重试", "error");
-      }
-    }
-
-    async function pollInferenceTask(taskId) {
-      if (!taskId || inferencePolling) return;
-      inferencePolling = true;
-      try {
-        const q = await fetch(`/infer-market-share/${taskId}`);
-        if (!q.ok) {
-          setStatus(`任务 ${taskId} 查询失败`, "error");
-          setInferenceControls(false);
-          return;
-        }
-        const data = await q.json();
-        renderInferenceResult(data);
-
-        if (isInferenceTerminal(data.status)) {
-          finalizeInference(data);
-          return;
-        }
-
-        const attemptCount = Array.isArray(data.attempt_log) ? data.attempt_log.length : 0;
-        const evidenceCount = Array.isArray(data.evidence_chain) ? data.evidence_chain.length : 0;
-        setStatus(`推理进行中：任务 ${taskId}，日志 ${attemptCount} 条，证据 ${evidenceCount} 条`);
-      } catch (_e) {
-        setStatus("推理结果同步异常，正在自动重试...", "error");
-      } finally {
-        inferencePolling = false;
-      }
-
-      if (lastInferenceTaskId === taskId) {
-        inferencePollTimer = setTimeout(() => pollInferenceTask(taskId), 2000);
-      }
-    }
-
-    async function runInference() {
-      const company = document.getElementById("company_name").value.trim();
-      const product = document.getElementById("product_name").value.trim();
-      const companyIntro = document.getElementById("company_intro").value.trim();
-      const productIntro = document.getElementById("product_intro").value.trim();
-      if (!company || !product) {
-        setStatus("请先填写企业名称和主导产品", "error");
-        return;
-      }
-
-      const payload = {
-        company_name: company,
-        product_name: product,
-        product_code: document.getElementById("product_code").value.trim(),
-        product_intro: productIntro,
-        company_intro: companyIntro,
-        competitors: collectCompetitorNames(),
-        sale_23: document.getElementById("sale_23").value,
-        sale_24: document.getElementById("sale_24").value,
-        sale_25: document.getElementById("sale_25").value,
-        target_scope: document.getElementById("target_scope").value,
-      };
-
-      try {
-        if (lastInferenceTaskId) {
-          const check = await fetch(`/infer-market-share/${lastInferenceTaskId}`);
-          if (check.ok) {
-            const known = await check.json();
-            if (!isInferenceTerminal(known.status)) {
-              setInferenceControls(true);
-              setStatus(`检测到进行中任务 ${lastInferenceTaskId}，继续实时同步...`);
-              clearInferencePoll();
-              pollInferenceTask(lastInferenceTaskId);
-              return;
-            }
-            lastInferenceTaskId = null;
-          }
-        }
-
-        setStatus("正在提交推理任务...");
-        const submit = await fetch("/infer-market-share", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!submit.ok) {
-          setStatus("推理任务提交失败", "error");
-          return;
-        }
-
-        const submitData = await submit.json();
-        lastInferenceTaskId = submitData.task_id;
-        setInferenceControls(true);
-        saveDraft(true);
-        setStatus(`推理任务已提交：${lastInferenceTaskId}，正在实时同步...`);
-        clearInferencePoll();
-        pollInferenceTask(lastInferenceTaskId);
-      } catch (_e) {
-        setStatus("推理请求异常，请稍后重试", "error");
-        setInferenceControls(false);
-      }
-    }
-
-    async function stopInference() {
-      if (!lastInferenceTaskId) {
-        setStatus("当前没有运行中的推理任务", "error");
-        return;
-      }
-      try {
-        const resp = await fetch(`/infer-market-share/${lastInferenceTaskId}/cancel`, { method: "POST" });
-        if (!resp.ok) {
-          setStatus("停止推理失败，请稍后重试", "error");
-          return;
-        }
-        const body = await resp.json();
-        setStatus(body.message || "已发送停止请求，正在中断...");
-        clearInferencePoll();
-        pollInferenceTask(lastInferenceTaskId);
-      } catch (_e) {
-        setStatus("停止请求异常，请稍后重试", "error");
-      }
-    }
-
     async function ensureOtherChapter1(force = false) {
       const product = document.getElementById("product_name").value.trim();
       if (!product) {
@@ -2591,8 +2116,6 @@
         template_type: document.getElementById("template_type").value,
         proof_scope: document.getElementById("proof_scope").value,
         market_name: document.getElementById("market_name").value,
-        last_infer_task_id: lastInferenceTaskId,
-
         sale_23: document.getElementById("sale_23").value,
         total_mkt_23: document.getElementById("total_mkt_23").value,
         pct_23: document.getElementById("pct_23").value,
@@ -2635,7 +2158,6 @@
           }
         });
 
-        lastInferenceTaskId = snapshot.last_infer_task_id || null;
         otherProofResolvedProfiles = Array.isArray(snapshot.other_resolved_profiles) ? snapshot.other_resolved_profiles : [];
         otherProofPendingCompanies = Array.isArray(snapshot.other_pending_companies) ? snapshot.other_pending_companies : [];
 
@@ -2674,15 +2196,7 @@
         }
 
         updateDraftMeta(`${sourceLabel}已恢复`);
-        if (lastInferenceTaskId) {
-          setInferenceControls(true);
-          clearInferencePoll();
-          pollInferenceTask(lastInferenceTaskId);
-          if (!silent) setStatus(`${sourceLabel}恢复成功，继续同步任务 ${lastInferenceTaskId}`);
-        } else {
-          setInferenceControls(false);
-          if (!silent) setStatus(`${sourceLabel}恢复成功`);
-        }
+        if (!silent) setStatus(`${sourceLabel}恢复成功`);
         return true;
       } catch (_e) {
         if (!silent) setStatus("草稿格式异常，恢复失败", "error");
@@ -2886,8 +2400,6 @@
     }
 
     function resetFormToBlank() {
-      clearInferencePoll();
-      lastInferenceTaskId = null;
       otherProofChapter1Sections = [];
       otherProofResolvedProfiles = [];
       otherProofPendingCompanies = [];
@@ -2922,19 +2434,9 @@
       otherLayerHolder.innerHTML = "";
       addOtherLayer();
 
-      document.getElementById("infStatus").textContent = "未执行";
-      document.getElementById("infScore").textContent = "-";
-      document.getElementById("infShare").textContent = "-";
-      document.getElementById("infDepth").textContent = "-";
-      document.getElementById("infPath").textContent = "细分路径：尚未生成";
-      document.getElementById("attemptBody").innerHTML = '<tr><td colspan="4" class="empty">暂无执行日志</td></tr>';
-      document.getElementById("evidenceBody").innerHTML = '<tr><td colspan="6" class="empty">暂无证据条目</td></tr>';
-      document.getElementById("calcBody").innerHTML = '<tr><td colspan="2" class="empty">暂无测算过程</td></tr>';
-
       renderCompanyConfirmPanel();
       updateChapter1State("第一章：尚未生成");
       toggleTemplateMode();
-      setInferenceControls(false);
       updateProgress();
     }
 
@@ -2990,7 +2492,6 @@
       bindDraftHotkeys();
       toggleTemplateMode();
       updateProgress();
-      setInferenceControls(false);
 
       try {
         await initDraftLibrary();
@@ -3014,7 +2515,6 @@
 
     window.addEventListener("beforeunload", () => {
       saveDraft(true);
-      clearInferencePoll();
     });
   </script>
 </body>
