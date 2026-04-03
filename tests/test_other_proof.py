@@ -76,8 +76,8 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
     assert len(result["sections"]) == 9
     assert fake_client.calls, "LLM client should be called"
     kwargs = fake_client.calls[0]["kwargs"]
-    assert kwargs["timeout_seconds"] == 45
-    assert kwargs["max_output_tokens"] == 2600
+    assert kwargs["timeout_seconds"] == 0
+    assert kwargs["max_output_tokens"] is None
 
 
 def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
@@ -150,8 +150,8 @@ def test_generate_other_chapter1_uses_fast_mode_after_timeout(monkeypatch):
     assert len(result["sections"]) == 9
     assert any("快速模式" in item for item in result["warnings"])
     assert len(fake_client.calls) == 3
-    assert fake_client.calls[2]["kwargs"]["max_output_tokens"] == 900
-    assert fake_client.calls[2]["kwargs"]["timeout_seconds"] == 20
+    assert fake_client.calls[2]["kwargs"]["max_output_tokens"] is None
+    assert fake_client.calls[2]["kwargs"]["timeout_seconds"] == 0
 
 
 def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatch):
@@ -261,6 +261,54 @@ def test_normalize_chapter1_sections_supply_chain_always_has_five_subsections():
     assert len(visible) == 6
     assert visible[0] == "上游材料环节以铜材和工程塑料为主，供应稳定性直接影响交付周期。"
     assert all(str(item).strip() for item in visible[1:])
+
+
+def test_other_proof_body_plain_paragraph_justification_only_for_body_text():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    root = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            <w:p>
+              <w:r>
+                <w:rPr><w:rFonts w:eastAsia="宋体"/><w:sz w:val="24"/></w:rPr>
+                <w:t>这是正文段落，应设置为两端对齐。</w:t>
+              </w:r>
+            </w:p>
+            <w:p>
+              <w:r>
+                <w:rPr><w:rFonts w:eastAsia="宋体"/><w:sz w:val="24"/></w:rPr>
+                <w:t>图表1：示例标题</w:t>
+              </w:r>
+            </w:p>
+            <w:tbl>
+              <w:tr>
+                <w:tc>
+                  <w:p>
+                    <w:r>
+                      <w:rPr><w:rFonts w:eastAsia="宋体"/><w:sz w:val="24"/></w:rPr>
+                      <w:t>表格内正文不改</w:t>
+                    </w:r>
+                  </w:p>
+                </w:tc>
+              </w:tr>
+            </w:tbl>
+          </w:body>
+        </w:document>
+        """
+    )
+
+    other_proof._apply_body_plain_paragraph_justification(root)
+
+    paragraphs = root.findall(f".//{{{ns}}}p")
+    body_jc = paragraphs[0].find(f"./{{{ns}}}pPr/{{{ns}}}jc")
+    heading_jc = paragraphs[1].find(f"./{{{ns}}}pPr/{{{ns}}}jc")
+    table_jc = paragraphs[2].find(f"./{{{ns}}}pPr/{{{ns}}}jc")
+
+    assert body_jc is not None
+    assert body_jc.get(f"{{{ns}}}val") == "both"
+    assert heading_jc is None
+    assert table_jc is None
 
 
 def test_lookup_other_companies_uses_browser_qcc_result(monkeypatch):

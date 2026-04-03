@@ -112,14 +112,15 @@ def render_market_chart_png(series: ChartSeries) -> bytes:
     image = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(image)
 
-    left, right = 120, width - 88
+    left, right = 170, width - 88
     top, bottom = 72, height - 120
     axis_color = "#c9c9c9"
     tick_color = "#4f4f4f"
     bar_color = "#5b92c7"
-    value_font = _load_heiti_font(ImageFont, 42)
-    x_font = _load_heiti_font(ImageFont, 38)
-    y_font = _load_heiti_font(ImageFont, 32)
+    grid_color = "#e9eef4"
+    value_font = _load_heiti_font(ImageFont, 52)
+    x_font = _load_heiti_font(ImageFont, 46)
+    y_font = _load_heiti_font(ImageFont, 40)
 
     values = list(series.values)
     low, high, step = _compute_y_axis(values)
@@ -130,15 +131,16 @@ def render_market_chart_png(series: ChartSeries) -> bytes:
     # Y labels
     for tick in _frange(low, high, step):
         y = _map_y(tick, low, high, top, bottom)
+        draw.line([(left, y), (right, y)], fill=grid_color, width=2)
         tick_text = _format_number_label(tick)
         tick_bbox = draw.textbbox((0, 0), tick_text, font=y_font)
         tick_width = tick_bbox[2] - tick_bbox[0]
         tick_height = tick_bbox[3] - tick_bbox[1]
         draw.text((left - 20 - tick_width, y - tick_height / 2), tick_text, fill=tick_color, font=y_font)
 
-    years = ["2023年", "2024年", "2025年"]
+    years = ["2023", "2024", "2025"]
     span = (right - left) / 3
-    bar_width = int(span * 0.33)
+    bar_width = int(span * 0.4)
 
     for i, value in enumerate(values):
         center_x = left + span * (i + 0.5)
@@ -307,15 +309,22 @@ def _load_heiti_font(image_font_module, size: int):
         "/System/Library/Fonts/STHeiti Light.ttc",
         "/System/Library/Fonts/PingFang.ttc",
         "/System/Library/Fonts/Supplemental/SimHei.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     ]
     for font_path in candidates:
         try:
             return image_font_module.truetype(font_path, size=size)
         except OSError:
             continue
-    return image_font_module.load_default()
+    try:
+        return image_font_module.load_default(size=size)
+    except TypeError:
+        return image_font_module.load_default()
 
 
 def _draw_bold_text(*, draw, x: float, y: float, text: str, font, fill: str) -> None:

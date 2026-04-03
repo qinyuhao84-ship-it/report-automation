@@ -178,6 +178,54 @@ def test_rewrite_summary_market_research_phrase_replaces_quoted_product():
     assert "对“新产品”细分市场进行拆分和规模测算" in rendered
 
 
+def test_apply_body_plain_paragraph_justification_only_for_body_text():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    root = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            <w:p>
+              <w:r>
+                <w:rPr><w:rFonts w:eastAsia="宋体"/><w:sz w:val="24"/></w:rPr>
+                <w:t>这是正文段落，应设置为两端对齐。</w:t>
+              </w:r>
+            </w:p>
+            <w:p>
+              <w:r>
+                <w:rPr><w:rFonts w:eastAsia="宋体"/><w:sz w:val="24"/></w:rPr>
+                <w:t>一、背景与概述</w:t>
+              </w:r>
+            </w:p>
+            <w:tbl>
+              <w:tr>
+                <w:tc>
+                  <w:p>
+                    <w:r>
+                      <w:rPr><w:rFonts w:eastAsia="宋体"/><w:sz w:val="24"/></w:rPr>
+                      <w:t>表格内正文不改</w:t>
+                    </w:r>
+                  </w:p>
+                </w:tc>
+              </w:tr>
+            </w:tbl>
+          </w:body>
+        </w:document>
+        """
+    )
+
+    app_module.apply_body_plain_paragraph_justification(root)
+
+    paragraphs = root.findall(f".//{{{ns}}}p")
+    body_jc = paragraphs[0].find(f"./{{{ns}}}pPr/{{{ns}}}jc")
+    heading_jc = paragraphs[1].find(f"./{{{ns}}}pPr/{{{ns}}}jc")
+    table_jc = paragraphs[2].find(f"./{{{ns}}}pPr/{{{ns}}}jc")
+
+    assert body_jc is not None
+    assert body_jc.get(f"{{{ns}}}val") == "both"
+    assert heading_jc is None
+    assert table_jc is None
+
+
 def test_other_company_lookup_endpoint_returns_resolved_profiles(monkeypatch):
     client = TestClient(app_module.app)
 

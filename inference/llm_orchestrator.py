@@ -237,14 +237,20 @@ class OpenAICompatibleClient:
             "model": model or self.model,
             "messages": list(messages),
             "temperature": temperature,
-            "max_tokens": max_output_tokens or self.max_output_tokens,
         }
+        if max_output_tokens is not None:
+            payload["max_tokens"] = max_output_tokens
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "User-Agent": self.user_agent,
         }
-        request_timeout = httpx.Timeout(timeout_seconds) if timeout_seconds else None
+        if timeout_seconds is None:
+            request_timeout = httpx.Timeout(self.timeout_seconds)
+        elif timeout_seconds <= 0:
+            request_timeout = None
+        else:
+            request_timeout = httpx.Timeout(timeout_seconds)
         response = self._client.post(
             f"{self.api_base}/chat/completions",
             json=payload,

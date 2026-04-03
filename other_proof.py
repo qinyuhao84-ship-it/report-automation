@@ -69,6 +69,9 @@ PLACEHOLDER_TEXT = "该部分生成失败，请人工补充。"
 AIQICHA_TIMEOUT = 20.0
 SEARCH_TIMEOUT = 20.0
 BROWSER_HEADERS = {"User-Agent": "Mozilla/5.0"}
+BODY_HEADING_PATTERN = re.compile(
+    r"^\s*(图表|数据来源|来源网址|第[一二三四五六七八九十0-9]+章|[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|\([一二三四五六七八九十]+\)|\d+[\.、])"
+)
 
 
 class OtherProofError(RuntimeError):
@@ -100,10 +103,6 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
         },
         {"role": "user", "content": prompt},
     ]
-    # 第一章接口是同步 HTTP 请求，必须把单次调用预算控制在网关超时以内。
-    # 否则前端会先收到连接中断，看起来像“随机失败”。
-    chapter1_max_tokens = min(max(config.llm_max_output_tokens, 1400), 2600)
-    timeout_seconds = min(max(config.llm_timeout_seconds, 20), 45)
     retry_attempts = max(1, min(config.llm_retry_attempts + 1, 2))
     chapter1_model = _resolve_chapter1_model_name(
         config.llm_model,
@@ -118,8 +117,8 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
                 chapter1_messages,
                 model=chapter1_model,
                 temperature=0.2,
-                max_output_tokens=chapter1_max_tokens,
-                timeout_seconds=timeout_seconds,
+                max_output_tokens=None,
+                timeout_seconds=0,
             )
             if not str(raw or "").strip():
                 last_timeout_error = RuntimeError("LLM 返回为空")
@@ -200,8 +199,8 @@ def _try_generate_other_chapter1_fast(*, client: Any, product_name: str, model: 
             fast_messages,
             model=model,
             temperature=0.1,
-            max_output_tokens=900,
-            timeout_seconds=20,
+            max_output_tokens=None,
+            timeout_seconds=0,
         )
     except Exception:
         return ""
@@ -355,6 +354,7 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
     )
     _rewrite_summary_market_research_phrase(root, str(data.get("product_name") or "").strip())
     _compress_chapter1_visual_paragraphs(root, field_paragraphs)
+    _apply_body_plain_paragraph_justification(root)
     _rewrite_other_header_titles(
         file_map=file_map,
         company_name=self_row["display_name"],
@@ -1246,6 +1246,81 @@ def _set_paragraph_text(paragraph: ET.Element, text: str) -> None:
 def _get_paragraph_text(paragraph: ET.Element) -> str:
     texts = paragraph.findall(".//w:t", NS)
     return "".join(node.text or "" for node in texts).strip()
+
+
+def _apply_body_plain_paragraph_justification(root: ET.Element) -> None:
+    parent_map = {child: parent for parent in root.iter() for child in list(parent)}
+    for paragraph in root.findall(".//w:p", NS):
+        if _is_paragraph_inside_table(paragraph, parent_map):
+            continue
+        text = _get_paragraph_text(paragraph)
+        if not text or BODY_HEADING_PATTERN.match(text):
+            continue
+        if not _is_plain_small4_paragraph(paragraph):
+            continue
+        ppr = paragraph.find("./w:pPr", NS)
+        if ppr is None:
+            ppr = ET.Element(f"{{{NS['w']}}}pPr")
+            paragraph.insert(0, ppr)
+        jc = ppr.find("./w:jc", NS)
+        if jc is None:
+            jc = ET.SubElement(ppr, f"{{{NS['w']}}}jc")
+        jc.set(f"{{{NS['w']}}}val", "both")
+
+
+def _is_paragraph_inside_table(paragraph: ET.Element, parent_map: dict[ET.Element, ET.Element]) -> bool:
+    node = paragraph
+    while node in parent_map:
+        node = parent_map[node]
+        if node.tag == f"{{{NS['w']}}}tc":
+            return True
+    return False
+
+
+def _is_plain_small4_paragraph(paragraph: ET.Element) -> bool:
+    text_runs: List[ET.Element] = []
+    for run in paragraph.findall("./w:r", NS):
+        text = "".join((node.text or "") for node in run.findall("./w:t", NS)).strip()
+        if text:
+            text_runs.append(run)
+    if not text_runs:
+        return False
+
+    has_small4 = False
+    for run in text_runs:
+        rpr = run.find("./w:rPr", NS)
+        if rpr is None:
+            continue
+        if _run_is_bold(rpr) or _run_is_underline(rpr):
+            return False
+        if _run_font_size(rpr) == "24":
+            has_small4 = True
+    return has_small4
+
+
+def _run_font_size(rpr: ET.Element) -> str:
+    size_node = rpr.find("./w:sz", NS)
+    if size_node is None:
+        size_node = rpr.find("./w:szCs", NS)
+    if size_node is None:
+        return ""
+    return str(size_node.get(f"{{{NS['w']}}}val") or "").strip()
+
+
+def _run_is_bold(rpr: ET.Element) -> bool:
+    node = rpr.find("./w:b", NS)
+    if node is None:
+        return False
+    value = str(node.get(f"{{{NS['w']}}}val") or "1").strip().lower()
+    return value not in {"0", "false", "off"}
+
+
+def _run_is_underline(rpr: ET.Element) -> bool:
+    node = rpr.find("./w:u", NS)
+    if node is None:
+        return False
+    value = str(node.get(f"{{{NS['w']}}}val") or "single").strip().lower()
+    return value not in {"none", "0", "false", "off"}
 
 
 def _compress_chapter1_visual_paragraphs(root: ET.Element, field_paragraphs: Sequence[ET.Element]) -> None:

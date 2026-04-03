@@ -41,6 +41,9 @@ namespaces = {
 for prefix, uri in namespaces.items():
     ET.register_namespace(prefix, uri)
 NS = namespaces
+BODY_HEADING_PATTERN = re.compile(
+    r"^\s*(图表|数据来源|来源网址|第[一二三四五六七八九十0-9]+章|[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|\([一二三四五六七八九十]+\)|\d+[\.、])"
+)
 
 def get_text(node):
     if node is None: return ""
@@ -140,6 +143,81 @@ def set_paragraph_text(p: ET.Element, value: str) -> None:
     for other in runs[1:]:
         for ot in other.findall('./w:t', namespaces=NS):
             ot.text = ""
+
+
+def apply_body_plain_paragraph_justification(root: ET.Element) -> None:
+    parent_map = {child: parent for parent in root.iter() for child in list(parent)}
+    for paragraph in root.findall(".//w:p", namespaces=NS):
+        if _is_paragraph_inside_table(paragraph, parent_map):
+            continue
+        text = get_text(paragraph).strip()
+        if not text or BODY_HEADING_PATTERN.match(text):
+            continue
+        if not _is_plain_small4_paragraph(paragraph):
+            continue
+        ppr = paragraph.find("./w:pPr", namespaces=NS)
+        if ppr is None:
+            ppr = ET.Element(f"{{{NS['w']}}}pPr")
+            paragraph.insert(0, ppr)
+        jc = ppr.find("./w:jc", namespaces=NS)
+        if jc is None:
+            jc = ET.SubElement(ppr, f"{{{NS['w']}}}jc")
+        jc.set(f"{{{NS['w']}}}val", "both")
+
+
+def _is_paragraph_inside_table(paragraph: ET.Element, parent_map: dict[ET.Element, ET.Element]) -> bool:
+    node = paragraph
+    while node in parent_map:
+        node = parent_map[node]
+        if node.tag == f"{{{NS['w']}}}tc":
+            return True
+    return False
+
+
+def _is_plain_small4_paragraph(paragraph: ET.Element) -> bool:
+    text_runs = []
+    for run in paragraph.findall("./w:r", namespaces=NS):
+        texts = "".join((node.text or "") for node in run.findall("./w:t", namespaces=NS)).strip()
+        if texts:
+            text_runs.append(run)
+    if not text_runs:
+        return False
+
+    has_small4 = False
+    for run in text_runs:
+        rpr = run.find("./w:rPr", namespaces=NS)
+        if rpr is None:
+            continue
+        if _run_is_bold(rpr) or _run_is_underline(rpr):
+            return False
+        if _run_font_size(rpr) == "24":
+            has_small4 = True
+    return has_small4
+
+
+def _run_font_size(rpr: ET.Element) -> str:
+    size_node = rpr.find("./w:sz", namespaces=NS)
+    if size_node is None:
+        size_node = rpr.find("./w:szCs", namespaces=NS)
+    if size_node is None:
+        return ""
+    return str(size_node.get(f"{{{NS['w']}}}val") or "").strip()
+
+
+def _run_is_bold(rpr: ET.Element) -> bool:
+    node = rpr.find("./w:b", namespaces=NS)
+    if node is None:
+        return False
+    value = str(node.get(f"{{{NS['w']}}}val") or "1").strip().lower()
+    return value not in {"0", "false", "off"}
+
+
+def _run_is_underline(rpr: ET.Element) -> bool:
+    node = rpr.find("./w:u", namespaces=NS)
+    if node is None:
+        return False
+    value = str(node.get(f"{{{NS['w']}}}val") or "single").strip().lower()
+    return value not in {"none", "0", "false", "off"}
 
 class SourceBlock(BaseModel):
     name: str
@@ -410,6 +488,7 @@ def generate_docx_v4(data: dict, template_path, output_path):
     )
     rewrite_summary_market_research_phrase(tree, str(data.get("product_name", "")).strip())
     _rewrite_self_dynamic_chart_references(tree, source_count=num_sources)
+    apply_body_plain_paragraph_justification(tree)
     try:
         inject_market_charts_into_docx(
             document_root=tree,

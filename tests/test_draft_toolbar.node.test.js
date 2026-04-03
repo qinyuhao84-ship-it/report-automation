@@ -62,6 +62,15 @@ test('图表标题前缀自动生成，用户只填写后半句', () => {
   assert.match(html, /if \(block\.name \|\| block\.url \|\| suffix \|\| block\.analysis \|\| block\.chart_2023 \|\| block\.chart_2024 \|\| block\.chart_2025\) list\.push\(block\);/);
 });
 
+test('经营数据市场规模自动映射自最底层来源', () => {
+  assert.match(html, /<input id="total_mkt_23" readonly \/>/);
+  assert.match(html, /<input id="total_mkt_24" readonly \/>/);
+  assert.match(html, /<input id="total_mkt_25" readonly \/>/);
+  assert.match(html, /function syncBusinessMarketScaleFromSources\(\) \{/);
+  assert.match(html, /const bottom = sources\.length \? sources\[sources\.length - 1\] : null;/);
+  assert.match(html, /syncBusinessMarketScaleFromSources\(\);\s*const company = document\.getElementById\("company_name"\)\.value\.trim\(\);/);
+});
+
 test('竞争对手输入不自动跳格，也不自动重排行', () => {
   assert.match(
     html,
@@ -75,8 +84,11 @@ test('竞争对手输入不自动跳格，也不自动重排行', () => {
 
 test('他证支持第一章失败后跳过继续生成', () => {
   assert.match(html, /id="skipChapter1OnFailure"/);
+  assert.match(html, /id="stopChapter1Btn"/);
   assert.match(html, /if \(resp\.status === 504\) \{/);
   assert.match(html, /可勾选“第一章失败后跳过继续生成”/);
+  assert.match(html, /function abortOtherChapter1Generation\(\) \{/);
+  assert.match(html, /signal: otherChapter1AbortController\.signal/);
   assert.match(html, /const skipChapter1OnFailure = document\.getElementById\("skipChapter1OnFailure"\)\?\.checked === true;/);
   assert.match(html, /if \(!skipChapter1OnFailure\) return;/);
   assert.match(html, /第一章：生成失败，已跳过并写入占位内容/);

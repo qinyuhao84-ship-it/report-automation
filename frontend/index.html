@@ -772,7 +772,7 @@
             <h3>经营数据</h3>
             <span class="badge must">必填</span>
           </div>
-          <div class="warn-box">市场占有率按“销售额 / 市场规模”自动计算。</div>
+          <div class="warn-box">市场规模自动映射自“数据来源（分层）”最底层；市场占有率按“销售额 / 市场规模”自动计算。</div>
           <table>
             <thead>
               <tr>
@@ -787,21 +787,21 @@
               <tr>
                 <td>2023</td>
                 <td><input id="sale_23" oninput="calcMyPct('23')" /></td>
-                <td><input id="total_mkt_23" oninput="calcMyPct('23')" /></td>
+                <td><input id="total_mkt_23" readonly /></td>
                 <td><input id="pct_23" readonly /></td>
                 <td><input id="rank_23" readonly /></td>
               </tr>
               <tr>
                 <td>2024</td>
                 <td><input id="sale_24" oninput="calcMyPct('24')" /></td>
-                <td><input id="total_mkt_24" oninput="calcMyPct('24')" /></td>
+                <td><input id="total_mkt_24" readonly /></td>
                 <td><input id="pct_24" readonly /></td>
                 <td><input id="rank_24" readonly /></td>
               </tr>
               <tr>
                 <td>2025</td>
                 <td><input id="sale_25" oninput="calcMyPct('25')" /></td>
-                <td><input id="total_mkt_25" oninput="calcMyPct('25')" /></td>
+                <td><input id="total_mkt_25" readonly /></td>
                 <td><input id="pct_25" readonly /></td>
                 <td><input id="rank_25" readonly /></td>
               </tr>
@@ -896,6 +896,7 @@
               <input id="skipChapter1OnFailure" type="checkbox" />
               第一章失败后跳过继续生成
             </label>
+            <button id="stopChapter1Btn" class="btn subtle other-only" type="button" style="display:none;" onclick="abortOtherChapter1Generation()">终止第一章生成</button>
             <button id="regenChapter1Btn" class="btn subtle" type="button" style="display:none;" onclick="regenerateOtherChapter1()">重新生成第一章</button>
             <button class="btn accent" type="button" onclick="generate()">生成最终 Word</button>
           </div>
@@ -915,6 +916,8 @@
     let otherProofChapter1CacheByCompany = {};
     let otherProofResolvedProfiles = [];
     let otherProofPendingCompanies = [];
+    let otherChapter1AbortController = null;
+    let chapter1AbortHappened = false;
 
     function setStatus(text, mode) {
       const el = document.getElementById("status");
@@ -1503,6 +1506,7 @@
       if (!card) return;
       card.remove();
       refreshSourceLabels();
+      syncBusinessMarketScaleFromSources();
       saveDraft();
     }
 
@@ -1571,6 +1575,7 @@
 
     function addSourceLayer() {
       addSource();
+      syncBusinessMarketScaleFromSources();
       saveDraft();
     }
 
@@ -1616,6 +1621,7 @@
         card.querySelector(".s-c25").value = prefill.chart_2025 || "";
         card.querySelector(".s-quote").value = prefill.analysis || "";
       }
+      syncBusinessMarketScaleFromSources();
     }
 
     function collectCompetitors() {
@@ -1686,6 +1692,26 @@
         });
       }
       return list;
+    }
+
+    function syncBusinessMarketScaleFromSources() {
+      const sources = collectSources(false);
+      const bottom = sources.length ? sources[sources.length - 1] : null;
+      const mapping = [
+        ["23", "chart_2023"],
+        ["24", "chart_2024"],
+        ["25", "chart_2025"],
+      ];
+
+      mapping.forEach(([year, sourceKey]) => {
+        const input = document.getElementById(`total_mkt_${year}`);
+        if (!input) return;
+        const nextValue = bottom ? String(bottom[sourceKey] || "").trim() : "";
+        if (input.value !== nextValue) {
+          input.value = nextValue;
+        }
+        calcMyPct(year);
+      });
     }
 
     function validateSourceChartData(sources, contextLabel = "数据来源") {
@@ -1871,6 +1897,17 @@
       }
     }
 
+    function abortOtherChapter1Generation() {
+      if (!otherChapter1AbortController) {
+        setStatus("当前没有正在执行的第一章生成任务");
+        return;
+      }
+      chapter1AbortHappened = true;
+      otherChapter1AbortController.abort();
+      setStatus("第一章生成已终止");
+      updateChapter1State("第一章：已手动终止");
+    }
+
     async function ensureOtherChapter1(force = false) {
       const product = document.getElementById("product_name").value.trim();
       if (!product) {
@@ -1894,11 +1931,15 @@
 
       try {
         updateChapter1State("第一章：正在生成...");
+        chapter1AbortHappened = false;
+        otherChapter1AbortController = new AbortController();
         const resp = await fetch("/other-proof/chapter1", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: otherChapter1AbortController.signal,
           body: JSON.stringify({ product_name: product }),
         });
+        otherChapter1AbortController = null;
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
           updateChapter1State("第一章：生成失败");
@@ -1922,6 +1963,11 @@
         }
         return true;
       } catch (_e) {
+        if (_e && _e.name === "AbortError") {
+          otherChapter1AbortController = null;
+          return false;
+        }
+        otherChapter1AbortController = null;
         updateChapter1State("第一章：生成失败");
         setStatus("第一章生成失败：网络异常", "error");
         return false;
@@ -1948,6 +1994,7 @@
     }
 
     async function generate() {
+      syncBusinessMarketScaleFromSources();
       const company = document.getElementById("company_name").value.trim();
       const product = document.getElementById("product_name").value.trim();
       const companyIntro = document.getElementById("company_intro").value.trim();
@@ -2031,6 +2078,7 @@
         setStatus("正在生成第一章...");
         const chapter1Ready = await ensureOtherChapter1(false);
         if (!chapter1Ready) {
+          if (chapter1AbortHappened) return;
           const skipChapter1OnFailure = document.getElementById("skipChapter1OnFailure")?.checked === true;
           if (!skipChapter1OnFailure) return;
           otherProofChapter1Sections = [];
@@ -2175,6 +2223,7 @@
         sourceCount = 0;
         (snapshot.sources || []).forEach((s) => addSource(s));
         if (!snapshot.sources || snapshot.sources.length === 0) addSource();
+        syncBusinessMarketScaleFromSources();
 
         const otherLayerHolder = document.getElementById("otherLayerList");
         otherLayerHolder.innerHTML = "";
@@ -2429,6 +2478,7 @@
       sourceHolder.innerHTML = "";
       sourceCount = 0;
       addSource();
+      syncBusinessMarketScaleFromSources();
 
       const otherLayerHolder = document.getElementById("otherLayerList");
       otherLayerHolder.innerHTML = "";
@@ -2445,6 +2495,9 @@
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
         if (target.matches("input, textarea, select")) {
+          if (target.matches(".s-c23, .s-c24, .s-c25")) {
+            syncBusinessMarketScaleFromSources();
+          }
           if (target.matches("#company_name, .c-name")) {
             resetOtherCompanyLookupState();
           }
@@ -2460,6 +2513,9 @@
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
         if (target.matches("input, textarea, select")) {
+          if (target.matches(".s-c23, .s-c24, .s-c25")) {
+            syncBusinessMarketScaleFromSources();
+          }
           if (target.matches("#company_name, .c-name")) {
             resetOtherCompanyLookupState();
           }
