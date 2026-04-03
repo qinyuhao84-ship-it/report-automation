@@ -772,7 +772,7 @@
             <h3>经营数据</h3>
             <span class="badge must">必填</span>
           </div>
-          <div class="warn-box">市场规模自动映射自“数据来源（分层）”最底层；市场占有率按“销售额 / 市场规模”自动计算。</div>
+          <div class="warn-box">市场规模自动映射自“数据来源（分层）”最底层，并按“亿元→万元”自动换算（×10000）；市场占有率按“销售额 / 市场规模”自动计算。</div>
           <table>
             <thead>
               <tr>
@@ -1706,12 +1706,23 @@
       mapping.forEach(([year, sourceKey]) => {
         const input = document.getElementById(`total_mkt_${year}`);
         if (!input) return;
-        const nextValue = bottom ? String(bottom[sourceKey] || "").trim() : "";
+        const nextValue = bottom ? convertMarketScaleYiToWan(bottom[sourceKey]) : "";
         if (input.value !== nextValue) {
           input.value = nextValue;
         }
         calcMyPct(year);
       });
+    }
+
+    function convertMarketScaleYiToWan(rawValue) {
+      const rawText = String(rawValue || "").replace(/,/g, "").trim();
+      if (!rawText) return "";
+      const yiValue = Number(rawText);
+      if (!Number.isFinite(yiValue)) return "";
+      const wanValue = yiValue * 10000;
+      const rounded = Math.round(wanValue * 10000) / 10000;
+      const text = String(rounded);
+      return text.includes(".") ? text.replace(/\.?0+$/, "") : text;
     }
 
     function validateSourceChartData(sources, contextLabel = "数据来源") {

@@ -68,6 +68,8 @@ test('经营数据市场规模自动映射自最底层来源', () => {
   assert.match(html, /<input id="total_mkt_25" readonly \/>/);
   assert.match(html, /function syncBusinessMarketScaleFromSources\(\) \{/);
   assert.match(html, /const bottom = sources\.length \? sources\[sources\.length - 1\] : null;/);
+  assert.match(html, /function convertMarketScaleYiToWan\(rawValue\) \{/);
+  assert.match(html, /const wanValue = yiValue \* 10000;/);
   assert.match(html, /syncBusinessMarketScaleFromSources\(\);\s*const company = document\.getElementById\("company_name"\)\.value\.trim\(\);/);
 });
 
