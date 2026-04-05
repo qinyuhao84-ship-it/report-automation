@@ -115,9 +115,8 @@ def render_market_chart_png(series: ChartSeries) -> bytes:
     left, right = 170, width - 88
     top, bottom = 72, height - 120
     axis_color = "#c9c9c9"
-    tick_color = "#4f4f4f"
-    bar_color = "#5b92c7"
-    grid_color = "#e9eef4"
+    tick_color = "#555555"
+    bar_color = "#1D6485"
     value_font = _load_heiti_font(ImageFont, 52)
     x_font = _load_heiti_font(ImageFont, 46)
     y_font = _load_heiti_font(ImageFont, 40)
@@ -125,22 +124,22 @@ def render_market_chart_png(series: ChartSeries) -> bytes:
     values = list(series.values)
     low, high, step = _compute_y_axis(values)
 
-    # Axis baseline
+    # Keep only the bottom baseline to match template style.
     draw.line([(left, bottom), (right, bottom)], fill=axis_color, width=3)
 
-    # Y labels
+    # Y labels (no horizontal grid lines in final style).
     for tick in _frange(low, high, step):
         y = _map_y(tick, low, high, top, bottom)
-        draw.line([(left, y), (right, y)], fill=grid_color, width=2)
         tick_text = _format_number_label(tick)
         tick_bbox = draw.textbbox((0, 0), tick_text, font=y_font)
         tick_width = tick_bbox[2] - tick_bbox[0]
         tick_height = tick_bbox[3] - tick_bbox[1]
         draw.text((left - 20 - tick_width, y - tick_height / 2), tick_text, fill=tick_color, font=y_font)
 
-    years = ["2023", "2024", "2025"]
+    years = ["2023年", "2024年", "2025年"]
     span = (right - left) / 3
     bar_width = int(span * 0.4)
+    label_offset = max(18, int((bottom - top) * 0.03))
 
     for i, value in enumerate(values):
         center_x = left + span * (i + 0.5)
@@ -154,13 +153,11 @@ def render_market_chart_png(series: ChartSeries) -> bytes:
         value_bbox = draw.textbbox((0, 0), value_text, font=value_font)
         value_width = value_bbox[2] - value_bbox[0]
         value_height = value_bbox[3] - value_bbox[1]
-        _draw_bold_text(
-            draw=draw,
-            x=center_x - value_width / 2,
-            y=y - value_height - 18,
-            text=value_text,
+        draw.text(
+            (center_x - value_width / 2, y - value_height - label_offset),
+            value_text,
+            fill="#444444",
             font=value_font,
-            fill="#3e3e3e",
         )
 
         year_text = years[i]
@@ -187,23 +184,20 @@ def _pick_axis_step(max_v: float) -> float:
     if max_v <= 0:
         return 1.0
 
-    preferred_steps: list[float] = []
-    for power in range(0, 9):
-        base = 10 ** power
-        preferred_steps.extend([1.0 * base, 5.0 * base])
+    # Target around 7 ticks and snap to 1/2/5 * 10^n ("nice number" scale).
+    rough_step = max_v / 6.0
+    magnitude = 10 ** math.floor(math.log10(rough_step))
+    normalized = rough_step / magnitude
 
-    valid_steps = [step for step in preferred_steps if math.ceil(max_v / step) + 1 <= 10]
-    if not valid_steps:
-        return preferred_steps[-1]
-
-    target_ticks = 7
-    return min(
-        valid_steps,
-        key=lambda step: (
-            abs((math.ceil(max_v / step) + 1) - target_ticks),
-            step,
-        ),
-    )
+    if normalized <= 1:
+        nice = 1.0
+    elif normalized <= 2:
+        nice = 2.0
+    elif normalized <= 5:
+        nice = 5.0
+    else:
+        nice = 10.0
+    return nice * magnitude
 
 
 def _map_y(value: float, low: float, high: float, top: int, bottom: int) -> int:

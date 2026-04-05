@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import zipfile
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -320,3 +321,42 @@ def test_chart_axis_uses_small_integer_step_for_small_values():
     assert step == 5.0
     assert high == 25.0
     assert int(high / step) + 1 <= 10
+
+
+def test_chart_axis_uses_step_two_for_decimal_values_near_ten():
+    low, high, step = chart_docx._compute_y_axis([8.42, 9.32, 10.32])
+    assert low == 0.0
+    assert step == 2.0
+    assert high == 12.0
+    assert int(high / step) + 1 <= 10
+
+
+def test_chart_axis_uses_step_fifty_for_large_spread_values():
+    low, high, step = chart_docx._compute_y_axis([12, 197, 50])
+    assert low == 0.0
+    assert step == 50.0
+    assert high == 200.0
+    assert int(high / step) + 1 <= 10
+
+
+def test_rendered_chart_background_is_white_and_has_expected_bar_color():
+    try:
+        from PIL import Image
+    except ImportError:
+        raise AssertionError("Pillow is required for chart rendering test")
+
+    image_bytes = chart_docx.render_market_chart_png(
+        chart_docx.ChartSeries(
+            values=(12.0, 197.0, 50.0),
+            labels=("12", "197", "50"),
+        )
+    )
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+    # Ensure background remains white.
+    assert image.getpixel((0, 0)) == (255, 255, 255)
+    assert image.getpixel((40, 40)) == (255, 255, 255)
+
+    # Ensure at least one pixel uses the configured bar color.
+    bar_color = (29, 100, 133)  # #1D6485
+    assert bar_color in image.getdata()
