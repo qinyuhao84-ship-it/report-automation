@@ -104,6 +104,9 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
         {"role": "user", "content": prompt},
     ]
     retry_attempts = max(1, min(config.llm_retry_attempts + 1, 2))
+    chapter1_timeout_seconds = max(20, int(config.llm_timeout_seconds))
+    # 第一章结构复杂，显式给更高输出预算，避免被模型默认上限截断。
+    chapter1_max_output_tokens = max(3000, int(config.llm_max_output_tokens))
     chapter1_model = _resolve_chapter1_model_name(
         config.llm_model,
         getattr(orchestrator.client, "model", "") or config.llm_model,
@@ -117,8 +120,8 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
                 chapter1_messages,
                 model=chapter1_model,
                 temperature=0.2,
-                max_output_tokens=None,
-                timeout_seconds=0,
+                max_output_tokens=chapter1_max_output_tokens,
+                timeout_seconds=chapter1_timeout_seconds,
             )
             if not str(raw or "").strip():
                 last_timeout_error = RuntimeError("LLM 返回为空")
@@ -137,6 +140,8 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
             client=orchestrator.client,
             product_name=product_name.strip(),
             model=chapter1_model,
+            timeout_seconds=chapter1_timeout_seconds,
+            max_output_tokens=chapter1_max_output_tokens,
         )
         if not str(raw or "").strip():
             raise OtherProofTimeoutError(
@@ -152,6 +157,29 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
         raw_sections, parse_warning = _coerce_chapter1_sections_from_text(raw)
 
     normalized, warnings = normalize_chapter1_sections(raw_sections)
+    normalized, repair_warnings, repaired_keys = _repair_empty_chapter1_sections(
+        client=orchestrator.client,
+        model=chapter1_model,
+        product_name=product_name.strip(),
+        sections=normalized,
+        timeout_seconds=chapter1_timeout_seconds,
+        max_output_tokens=chapter1_max_output_tokens,
+    )
+    if repaired_keys:
+        repaired_titles = {
+            CHAPTER1_SPEC_MAP[key]["title"]
+            for key in repaired_keys
+            if key in CHAPTER1_SPEC_MAP
+        }
+        warnings = [
+            item
+            for item in warnings
+            if not (
+                any(f"第一章《{title}》" in item for title in repaired_titles)
+                and ("未生成成功" in item or "段落不足" in item)
+            )
+        ]
+    warnings.extend(repair_warnings)
     if mode_warning:
         warnings.insert(0, mode_warning)
     if parse_warning:
@@ -182,7 +210,14 @@ def _resolve_chapter1_model_name(config_model: str, fallback_model: str) -> str:
     return model or fallback_model
 
 
-def _try_generate_other_chapter1_fast(*, client: Any, product_name: str, model: str) -> str:
+def _try_generate_other_chapter1_fast(
+    *,
+    client: Any,
+    product_name: str,
+    model: str,
+    timeout_seconds: int,
+    max_output_tokens: int,
+) -> str:
     fast_messages = [
         {
             "role": "system",
@@ -199,8 +234,8 @@ def _try_generate_other_chapter1_fast(*, client: Any, product_name: str, model: 
             fast_messages,
             model=model,
             temperature=0.1,
-            max_output_tokens=None,
-            timeout_seconds=0,
+            max_output_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds,
         )
     except Exception:
         return ""
@@ -1540,7 +1575,7 @@ def _normalize_supply_chain_content(text: str, *, topic: str) -> str:
 
 
 def _find_best_split_index(paragraphs: Sequence[str]) -> int | None:
-    candidates = [idx for idx, text in enumerate(paragraphs) if len(str(text).strip()) >= 80]
+    candidates = [idx for idx, text in enumerate(paragraphs) if len(str(text).strip()) >= 16]
     if not candidates:
         return None
     return max(candidates, key=lambda idx: len(str(paragraphs[idx]).strip()))
@@ -1659,6 +1694,100 @@ def _coerce_chapter1_sections_from_text(raw_text: str) -> tuple[List[Dict[str, A
     return sections, "第一章返回了非 JSON 文本，系统已自动解析并映射到模板章节"
 
 
+def _repair_empty_chapter1_sections(
+    *,
+    client: Any,
+    model: str,
+    product_name: str,
+    sections: Sequence[Dict[str, Any]],
+    timeout_seconds: int,
+    max_output_tokens: int,
+) -> tuple[List[Dict[str, Any]], List[str], List[str]]:
+    existing_map: Dict[str, Dict[str, Any]] = {}
+    empty_specs: List[Dict[str, Any]] = []
+    for item in sections:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if key not in CHAPTER1_SPEC_MAP:
+            continue
+        existing_map[key] = item
+        paragraphs = [str(text).strip() for text in (item.get("paragraphs") or []) if str(text).strip()]
+        non_placeholder = [text for text in paragraphs if text != PLACEHOLDER_TEXT]
+        if not non_placeholder:
+            empty_specs.append(CHAPTER1_SPEC_MAP[key])
+
+    if not empty_specs:
+        return list(sections), [], []
+
+    repair_messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是产业研究分析师。"
+                "当前任务是补写缺失章节。"
+                "只输出 JSON，不要解释，不要 Markdown。"
+            ),
+        },
+        {"role": "user", "content": _build_chapter1_repair_prompt(product_name, empty_specs)},
+    ]
+    try:
+        raw = client.complete(
+            repair_messages,
+            model=model,
+            temperature=0.1,
+            max_output_tokens=max(1400, min(max_output_tokens, 5000)),
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception:
+        return list(sections), ["第一章缺失章节补全请求失败，已保留当前内容"], []
+
+    repair_parse_warning = ""
+    try:
+        parsed = _extract_json_payload(raw)
+        repair_raw_sections = parsed.get("sections")
+    except OtherProofError:
+        repair_raw_sections, repair_parse_warning = _coerce_chapter1_sections_from_text(raw)
+
+    repaired_sections, _repaired_warnings = normalize_chapter1_sections(repair_raw_sections)
+    repaired_map: Dict[str, Dict[str, Any]] = {
+        str(item.get("key") or "").strip(): item
+        for item in repaired_sections
+        if isinstance(item, dict) and str(item.get("key") or "").strip() in CHAPTER1_SPEC_MAP
+    }
+
+    replaced_titles: List[str] = []
+    for spec in empty_specs:
+        key = spec["key"]
+        repaired = repaired_map.get(key)
+        target = existing_map.get(key)
+        if not repaired or not target:
+            continue
+        paragraphs = [str(text).strip() for text in (repaired.get("paragraphs") or []) if str(text).strip()]
+        non_placeholder = [text for text in paragraphs if text != PLACEHOLDER_TEXT]
+        if not non_placeholder:
+            continue
+        target["paragraphs"] = paragraphs
+        replaced_titles.append(spec["title"])
+
+    merged_sections: List[Dict[str, Any]] = []
+    for spec in CHAPTER1_SECTION_SPECS:
+        key = spec["key"]
+        section = existing_map.get(key)
+        if isinstance(section, dict):
+            merged_sections.append(section)
+
+    warnings: List[str] = []
+    if repair_parse_warning:
+        warnings.append(repair_parse_warning)
+    if replaced_titles:
+        warnings.append("第一章已补全缺失章节：" + "、".join(replaced_titles))
+    else:
+        warnings.append("第一章缺失章节补全未成功，仍需人工补充")
+    replaced_keys = [spec["key"] for spec in empty_specs if spec["title"] in replaced_titles]
+    return merged_sections, warnings, replaced_keys
+
+
 def _extract_sections_from_json_like_text(text: str) -> List[Dict[str, Any]]:
     key_positions = list(re.finditer(r'"key"\s*:\s*"([^"]+)"', text))
     if not key_positions:
@@ -1709,10 +1838,30 @@ def _build_chapter1_fast_prompt(product_name: str) -> str:
         "要求：\n"
         "1) 仅输出 JSON：{\"sections\":[...]}。\n"
         f"2) sections 必须包含以下 key：{keys}。\n"
-        "3) 每个 key 只写 1 段，控制在 80-150 字。\n"
-        "4) industry_supply_chain 需在同一段中涵盖“（一）到（五）”五个小分类。\n"
+        "3) 每个 key 至少 2 段，每段 90-160 字，避免只写标题短语。\n"
+        "4) industry_supply_chain 至少 6 段：总述 1 段 +（一）到（五）五个小分类各 1 段。\n"
     )
 
+
+
+def _build_chapter1_repair_prompt(product_name: str, specs: Sequence[Dict[str, Any]]) -> str:
+    lines = []
+    for item in specs:
+        slot_count = int(item["slot_count"])
+        min_paragraphs = max(3, min(8, slot_count // 3))
+        lines.append(
+            f"- key={item['key']}，title={item['title']}：至少 {min_paragraphs} 段，每段 100-180 字，"
+            "段落应是完整陈述句。"
+        )
+    requirements = "\n".join(lines)
+    return (
+        f"产品：{product_name}\n"
+        "以下章节在第一轮生成中缺失，请只补写这些章节。\n"
+        "只输出 JSON，格式：{\"sections\":[{\"key\":\"...\",\"title\":\"...\",\"paragraphs\":[\"...\"]}]}\n"
+        "要求：\n"
+        f"{requirements}\n"
+        "不要输出任何 JSON 之外的文本。"
+    )
 
 
 def _build_chapter1_prompt(product_name: str) -> str:
@@ -1720,7 +1869,7 @@ def _build_chapter1_prompt(product_name: str) -> str:
     spec_text = "\n".join(specs)
     return (
         f"产品：{product_name}。为这个产品撰写行业研究报告。\n"
-        "要求：不要出现数据，尽可能通过文字描述。全文控制在 900-1200 字，优先保证目录完整。注意用词用语。\n"
+        "要求：不要出现具体统计数据，尽可能通过文字描述。全文建议 2200-3200 字，优先保证目录完整。注意用词用语。\n"
         "目标：撰写报告\n"
         "受众：专业人士\n"
         "类型：行业研究报告\n"
@@ -1750,7 +1899,7 @@ def _build_chapter1_prompt(product_name: str) -> str:
         "2. 每个 paragraphs 元素都必须是一段完整、连贯、正式的研究报告段落，禁止输出“总体工作原理”“机械自锁结构”这类孤立小标题或短语。\n"
         "3. 不要使用项目符号、清单式罗列、词条式拆分，也不要输出除 JSON 之外的任何文字。\n"
         "4. 内容必须是面向专业人士的行业研究报告写法，不要口语化，不要写企业私有数据，不要写“待补充”。\n"
-        "5. 每个一级部分建议 1-2 段，总段落不超过 16 段；系统会自动重组到模板槽位。\n"
+        "5. 每个一级部分至少 2 段；industry_trends 至少 4 段；industry_supply_chain 至少 6 段。\n"
         "6. industry_supply_chain 必须包含“（一）到（五）”五个小分类，每个小分类至少 1 段，不得遗漏。\n"
     )
 

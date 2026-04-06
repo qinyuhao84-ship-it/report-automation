@@ -24,9 +24,10 @@ from other_proof import (
 def test_chapter1_prompt_uses_report_style_requirements():
     prompt = _build_chapter1_prompt("桥梁防撞主动预警系统以及多级消能防撞装置")
 
-    assert "900-1200 字" in prompt
+    assert "2200-3200 字" in prompt
     assert "行业研究报告" in prompt
     assert "禁止输出“总体工作原理”“机械自锁结构”这类孤立小标题或短语" in prompt
+    assert "每个一级部分至少 2 段" in prompt
     assert "industry_supply_chain 必须包含“（一）到（五）”五个小分类" in prompt
 
 
@@ -76,8 +77,8 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
     assert len(result["sections"]) == 9
     assert fake_client.calls, "LLM client should be called"
     kwargs = fake_client.calls[0]["kwargs"]
-    assert kwargs["timeout_seconds"] == 0
-    assert kwargs["max_output_tokens"] is None
+    assert kwargs["timeout_seconds"] == 300
+    assert kwargs["max_output_tokens"] == 8192
 
 
 def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
@@ -150,8 +151,8 @@ def test_generate_other_chapter1_uses_fast_mode_after_timeout(monkeypatch):
     assert len(result["sections"]) == 9
     assert any("快速模式" in item for item in result["warnings"])
     assert len(fake_client.calls) == 3
-    assert fake_client.calls[2]["kwargs"]["max_output_tokens"] is None
-    assert fake_client.calls[2]["kwargs"]["timeout_seconds"] == 0
+    assert fake_client.calls[2]["kwargs"]["max_output_tokens"] == 3000
+    assert fake_client.calls[2]["kwargs"]["timeout_seconds"] == 60
 
 
 def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatch):
@@ -242,7 +243,7 @@ def test_normalize_chapter1_sections_merges_heading_fragments():
 
     target = next(item for item in sections if item["key"] == "working_principle")
     assert target["paragraphs"][0].startswith("总体工作原理：系统通过感知模块")
-    assert target["paragraphs"][1].startswith("多级防护逻辑：在碰撞风险逐步提升时")
+    assert any(str(item).startswith("多级防护逻辑：在碰撞风险逐步提升时") for item in target["paragraphs"])
     assert any("工作原理" in item for item in warnings)
 
 

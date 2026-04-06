@@ -896,7 +896,7 @@
               <input id="skipChapter1OnFailure" type="checkbox" />
               第一章失败后跳过继续生成
             </label>
-            <button id="stopChapter1Btn" class="btn subtle other-only" type="button" style="display:none;" onclick="abortOtherChapter1Generation()">终止第一章生成</button>
+            <button id="stopChapter1Btn" class="btn subtle" type="button" style="display:none;" onclick="abortOtherChapter1Generation()">终止第一章生成</button>
             <button id="regenChapter1Btn" class="btn subtle" type="button" style="display:none;" onclick="regenerateOtherChapter1()">重新生成第一章</button>
             <button class="btn accent" type="button" onclick="generate()">生成最终 Word</button>
           </div>
@@ -1267,6 +1267,18 @@
       const el = document.getElementById("chapter1State");
       if (!el) return;
       el.textContent = message || "第一章：尚未生成";
+    }
+
+    function setChapter1RunningState(isRunning) {
+      const otherMode = isOtherTemplate();
+      const stopBtn = document.getElementById("stopChapter1Btn");
+      const regenBtn = document.getElementById("regenChapter1Btn");
+      if (stopBtn) {
+        stopBtn.style.display = otherMode && isRunning ? "inline-block" : "none";
+      }
+      if (regenBtn) {
+        regenBtn.disabled = !!isRunning;
+      }
     }
 
     function initDates() {
@@ -1901,6 +1913,7 @@
         node.style.display = otherMode ? "" : "none";
       });
       document.getElementById("regenChapter1Btn").style.display = otherMode ? "inline-block" : "none";
+      setChapter1RunningState(otherMode && !!otherChapter1AbortController);
       if (otherMode) {
         const target = getSelectedVersionTarget();
         applyCompanyChapter1Cache(target?.companyName || getCurrentCompanyName());
@@ -1917,12 +1930,17 @@
       otherChapter1AbortController.abort();
       setStatus("第一章生成已终止");
       updateChapter1State("第一章：已手动终止");
+      setChapter1RunningState(false);
     }
 
     async function ensureOtherChapter1(force = false) {
       const product = document.getElementById("product_name").value.trim();
       if (!product) {
         setStatus("请先填写主导产品名称", "error");
+        return false;
+      }
+      if (otherChapter1AbortController) {
+        setStatus("第一章正在生成中，请先等待完成或点击“终止第一章生成”", "error");
         return false;
       }
       const target = getSelectedVersionTarget();
@@ -1941,16 +1959,17 @@
       }
 
       try {
+        setStatus(force ? "正在重新生成第一章..." : "正在生成第一章...");
         updateChapter1State("第一章：正在生成...");
         chapter1AbortHappened = false;
         otherChapter1AbortController = new AbortController();
+        setChapter1RunningState(true);
         const resp = await fetch("/other-proof/chapter1", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: otherChapter1AbortController.signal,
           body: JSON.stringify({ product_name: product }),
         });
-        otherChapter1AbortController = null;
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
           updateChapter1State("第一章：生成失败");
@@ -1975,18 +1994,22 @@
         return true;
       } catch (_e) {
         if (_e && _e.name === "AbortError") {
-          otherChapter1AbortController = null;
           return false;
         }
-        otherChapter1AbortController = null;
         updateChapter1State("第一章：生成失败");
         setStatus("第一章生成失败：网络异常", "error");
         return false;
+      } finally {
+        otherChapter1AbortController = null;
+        setChapter1RunningState(false);
       }
     }
 
     async function regenerateOtherChapter1() {
-      if (!isOtherTemplate()) return;
+      if (!isOtherTemplate()) {
+        setStatus("请先切换到“他证模板”后再重新生成第一章", "error");
+        return;
+      }
       const ok = await ensureOtherChapter1(true);
       if (ok) setStatus("第一章已重新生成");
     }
