@@ -11,6 +11,7 @@ DRAWING_NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
     "rel": "http://schemas.openxmlformats.org/package/2006/relationships",
     "ct": "http://schemas.openxmlformats.org/package/2006/content-types",
 }
@@ -79,7 +80,8 @@ def inject_market_charts_into_docx(
         media_path = f"word/media/{image_name}.png"
         existing_media.add(media_path)
 
-        file_map[media_path] = render_market_chart_png(series)
+        canvas_size = _resolve_canvas_size_from_drawing(drawing)
+        file_map[media_path] = render_market_chart_png(series, canvas_size=canvas_size)
 
         rid = f"rId{next_rid}"
         next_rid += 1
@@ -102,30 +104,33 @@ def inject_market_charts_into_docx(
     _ensure_png_content_type(file_map)
 
 
-def render_market_chart_png(series: ChartSeries) -> bytes:
+def render_market_chart_png(series: ChartSeries, *, canvas_size: tuple[int, int] | None = None) -> bytes:
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as exc:
         raise ChartDataError("缺少 Pillow 依赖，无法生成图表图片") from exc
 
-    width, height = 1600, 980
+    width, height = canvas_size or (2400, 1470)
     image = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(image)
 
-    left, right = 170, width - 88
-    top, bottom = 72, height - 120
+    # Keep original visual proportions while scaling canvas for better Word clarity.
+    scale_x = width / 1600
+    scale_y = height / 980
+    left, right = int(170 * scale_x), int(width - 88 * scale_x)
+    top, bottom = int(72 * scale_y), int(height - 120 * scale_y)
     axis_color = "#c9c9c9"
     tick_color = "#555555"
     bar_color = "#1D6485"
-    value_font = _load_heiti_font(ImageFont, 52)
-    x_font = _load_heiti_font(ImageFont, 46)
-    y_font = _load_heiti_font(ImageFont, 40)
+    value_font = _load_heiti_font(ImageFont, max(16, int(52 * scale_y)))
+    x_font = _load_heiti_font(ImageFont, max(14, int(46 * scale_y)))
+    y_font = _load_heiti_font(ImageFont, max(12, int(40 * scale_y)))
 
     values = list(series.values)
     low, high, step = _compute_y_axis(values)
 
     # Keep only the bottom baseline to match template style.
-    draw.line([(left, bottom), (right, bottom)], fill=axis_color, width=3)
+    draw.line([(left, bottom), (right, bottom)], fill=axis_color, width=max(2, int(3 * scale_y)))
 
     # Y labels (no horizontal grid lines in final style).
     for tick in _frange(low, high, step):
@@ -139,7 +144,7 @@ def render_market_chart_png(series: ChartSeries) -> bytes:
     years = ["2023年", "2024年", "2025年"]
     span = (right - left) / 3
     bar_width = int(span * 0.4)
-    label_offset = max(18, int((bottom - top) * 0.03))
+    label_offset = max(int(18 * scale_y), int((bottom - top) * 0.03))
 
     for i, value in enumerate(values):
         center_x = left + span * (i + 0.5)
@@ -163,10 +168,10 @@ def render_market_chart_png(series: ChartSeries) -> bytes:
         year_text = years[i]
         year_bbox = draw.textbbox((0, 0), year_text, font=x_font)
         year_width = year_bbox[2] - year_bbox[0]
-        draw.text((center_x - year_width / 2, bottom + 18), year_text, fill=tick_color, font=x_font)
+        draw.text((center_x - year_width / 2, bottom + int(18 * scale_y)), year_text, fill=tick_color, font=x_font)
 
     out = BytesIO()
-    image.save(out, format="PNG")
+    image.save(out, format="PNG", dpi=(300, 300))
     return out.getvalue()
 
 
@@ -324,3 +329,25 @@ def _load_heiti_font(image_font_module, size: int):
 def _draw_bold_text(*, draw, x: float, y: float, text: str, font, fill: str) -> None:
     for dx, dy in ((0, 0), (0.35, 0)):
         draw.text((x + dx, y + dy), text, fill=fill, font=font)
+
+
+def _resolve_canvas_size_from_drawing(drawing: ET.Element) -> tuple[int, int]:
+    extent = drawing.find(".//wp:extent", DRAWING_NS)
+    if extent is None:
+        return 2400, 1470
+
+    try:
+        cx = int(extent.get("cx") or "0")
+        cy = int(extent.get("cy") or "0")
+    except ValueError:
+        return 2400, 1470
+
+    if cx <= 0 or cy <= 0:
+        return 2400, 1470
+
+    # Convert Word EMU size to pixels at 300 DPI for crisp embedding.
+    px_w = int(round((cx / 914400) * 300))
+    px_h = int(round((cy / 914400) * 300))
+    px_w = min(max(px_w, 1800), 3600)
+    px_h = min(max(px_h, 1050), 2400)
+    return px_w, px_h
