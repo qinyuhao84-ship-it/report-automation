@@ -728,7 +728,7 @@
             <span class="badge must">必填</span>
           </div>
           <div class="grid-2">
-            <div class="field"><label>省份</label><input id="province" /></div>
+            <div class="field"><label>省份（可不填）</label><input id="province" /></div>
             <div class="field"><label>企业名称</label><input id="company_name" /></div>
             <div class="field"><label>主导产品名称</label><input id="product_name" /></div>
             <div class="field"><label>产品代码</label><input id="product_code" /></div>
@@ -772,7 +772,7 @@
             <h3>经营数据</h3>
             <span class="badge must">必填</span>
           </div>
-          <div class="warn-box">市场规模自动映射自“数据来源（分层）”最底层，并按“亿元→万元”自动换算（×10000）；市场占有率按“销售额 / 市场规模”自动计算。</div>
+          <div class="warn-box">市场规模默认映射自“数据来源（分层）”最底层，并按“亿元→万元”自动换算（×10000）；你也可以手动填写，若与来源冲突则以最新来源为准；市场占有率按“销售额 / 市场规模”自动计算。</div>
           <table>
             <thead>
               <tr>
@@ -787,21 +787,21 @@
               <tr>
                 <td>2023</td>
                 <td><input id="sale_23" oninput="calcMyPct('23')" /></td>
-                <td><input id="total_mkt_23" readonly /></td>
+                <td><input id="total_mkt_23" oninput="onMarketInputChange('23')" /></td>
                 <td><input id="pct_23" readonly /></td>
                 <td><input id="rank_23" readonly /></td>
               </tr>
               <tr>
                 <td>2024</td>
                 <td><input id="sale_24" oninput="calcMyPct('24')" /></td>
-                <td><input id="total_mkt_24" readonly /></td>
+                <td><input id="total_mkt_24" oninput="onMarketInputChange('24')" /></td>
                 <td><input id="pct_24" readonly /></td>
                 <td><input id="rank_24" readonly /></td>
               </tr>
               <tr>
                 <td>2025</td>
                 <td><input id="sale_25" oninput="calcMyPct('25')" /></td>
-                <td><input id="total_mkt_25" readonly /></td>
+                <td><input id="total_mkt_25" oninput="onMarketInputChange('25')" /></td>
                 <td><input id="pct_25" readonly /></td>
                 <td><input id="rank_25" readonly /></td>
               </tr>
@@ -1120,6 +1120,7 @@
       versionSelect.innerHTML = "";
       if (!entries.length) {
         versionSelect.add(new Option("暂无版本", ""));
+        versionSelect.title = "当前企业暂无可用版本";
         updateTopActionState();
         return null;
       }
@@ -1127,6 +1128,7 @@
       entries.forEach((item) => {
         versionSelect.add(new Option(formatDraftEntryLabel(item), `version:${item.versionNo}`));
       });
+      versionSelect.title = `当前企业共 ${entries.length} 个版本；系统不做条数截断，会在浏览器可用容量内持续保存`;
 
       if (preferredEntry && entries.some((item) => `version:${item.versionNo}` === preferredEntry)) {
         versionSelect.value = preferredEntry;
@@ -1313,6 +1315,11 @@
       updateProgress();
     }
 
+    function onMarketInputChange(year) {
+      calcMyPct(year);
+      scheduleAutoSave();
+    }
+
     function parsePercentRatio(raw) {
       const text = String(raw || "").trim();
       if (!text) return null;
@@ -1322,6 +1329,25 @@
       if (text.includes("%")) return n / 100;
       if (n >= 0 && n <= 1) return n;
       return n / 100;
+    }
+
+    function numberToChinese(num) {
+      const digits = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+      if (!Number.isInteger(num) || num < 0) return String(num || "");
+      if (num < 10) return digits[num];
+      if (num === 10) return "十";
+      if (num < 20) return "十" + digits[num % 10];
+      if (num < 100) {
+        const tens = Math.floor(num / 10);
+        const ones = num % 10;
+        return digits[tens] + "十" + (ones ? digits[ones] : "");
+      }
+      return String(num);
+    }
+
+    function formatRankText(rankNo) {
+      if (!rankNo) return "";
+      return `第${numberToChinese(rankNo)}名`;
     }
 
     function setCompetitorPctFromSale(row, year) {
@@ -1466,14 +1492,14 @@
         const r23Input = row.querySelector(".c-r23");
         const r24Input = row.querySelector(".c-r24");
         const r25Input = row.querySelector(".c-r25");
-        if (r23Input) r23Input.value = r23 ? `第${r23}` : "";
-        if (r24Input) r24Input.value = r24 ? `第${r24}` : "";
-        if (r25Input) r25Input.value = r25 ? `第${r25}` : "";
+        if (r23Input) r23Input.value = formatRankText(r23);
+        if (r24Input) r24Input.value = formatRankText(r24);
+        if (r25Input) r25Input.value = formatRankText(r25);
 
         if (row.classList.contains("self-row")) {
-          document.getElementById("rank_23").value = r23 ? `第${r23}` : "";
-          document.getElementById("rank_24").value = r24 ? `第${r24}` : "";
-          document.getElementById("rank_25").value = r25 ? `第${r25}` : "";
+          document.getElementById("rank_23").value = formatRankText(r23);
+          document.getElementById("rank_24").value = formatRankText(r24);
+          document.getElementById("rank_25").value = formatRankText(r25);
         }
       });
     }
@@ -1490,7 +1516,7 @@
 
     function updateProgress() {
       const required = [
-        "province", "company_name", "product_name", "product_code", "company_intro", "product_intro", "sale_23", "sale_24", "sale_25"
+        "company_name", "product_name", "product_code", "company_intro", "product_intro", "sale_23", "sale_24", "sale_25"
       ];
       let filled = 0;
       required.forEach((id) => {
@@ -1719,11 +1745,21 @@
         const input = document.getElementById(`total_mkt_${year}`);
         if (!input) return;
         const nextValue = bottom ? convertMarketScaleYiToWan(bottom[sourceKey]) : "";
-        if (input.value !== nextValue) {
+        if (nextValue && input.value !== nextValue) {
           input.value = nextValue;
         }
         calcMyPct(year);
       });
+    }
+
+    function resolveEffectiveMarketScale(year, sources) {
+      const input = document.getElementById(`total_mkt_${year}`);
+      const manualValue = String(input?.value || "").trim();
+      const sourceYearKey = `chart_20${year}`;
+      const bottom = Array.isArray(sources) && sources.length ? sources[sources.length - 1] : null;
+      const mappedValue = bottom ? convertMarketScaleYiToWan(bottom[sourceYearKey]) : "";
+      if (mappedValue) return mappedValue;
+      return manualValue;
     }
 
     function convertMarketScaleYiToWan(rawValue) {
@@ -2045,10 +2081,23 @@
         return;
       }
 
-      const mergedIntro = [
-        companyIntro ? `企业介绍：${companyIntro}` : "",
-        productIntro ? `产品介绍：${productIntro}` : "",
-      ].filter(Boolean).join("\n\n");
+      const mergedIntro = templateType === "self"
+        ? companyIntro
+        : [
+            companyIntro ? `企业介绍：${companyIntro}` : "",
+            productIntro ? `产品介绍：${productIntro}` : "",
+          ].filter(Boolean).join("\n\n");
+
+      const effectiveMarket23 = resolveEffectiveMarketScale("23", sources);
+      const effectiveMarket24 = resolveEffectiveMarketScale("24", sources);
+      const effectiveMarket25 = resolveEffectiveMarketScale("25", sources);
+      const totalMkt23Input = document.getElementById("total_mkt_23");
+      const totalMkt24Input = document.getElementById("total_mkt_24");
+      const totalMkt25Input = document.getElementById("total_mkt_25");
+      if (totalMkt23Input && totalMkt23Input.value !== effectiveMarket23) totalMkt23Input.value = effectiveMarket23;
+      if (totalMkt24Input && totalMkt24Input.value !== effectiveMarket24) totalMkt24Input.value = effectiveMarket24;
+      if (totalMkt25Input && totalMkt25Input.value !== effectiveMarket25) totalMkt25Input.value = effectiveMarket25;
+      ["23", "24", "25"].forEach(calcMyPct);
 
       const data = {
         template_type: templateType,
@@ -2062,17 +2111,17 @@
         intro: mergedIntro,
 
         sale_23: document.getElementById("sale_23").value,
-        total_mkt_23: document.getElementById("total_mkt_23").value,
+        total_mkt_23: effectiveMarket23,
         pct_23: document.getElementById("pct_23").value,
         rank_23: document.getElementById("rank_23").value,
 
         sale_24: document.getElementById("sale_24").value,
-        total_mkt_24: document.getElementById("total_mkt_24").value,
+        total_mkt_24: effectiveMarket24,
         pct_24: document.getElementById("pct_24").value,
         rank_24: document.getElementById("rank_24").value,
 
         sale_25: document.getElementById("sale_25").value,
-        total_mkt_25: document.getElementById("total_mkt_25").value,
+        total_mkt_25: effectiveMarket25,
         pct_25: document.getElementById("pct_25").value,
         rank_25: document.getElementById("rank_25").value,
 
@@ -2293,7 +2342,8 @@
         updateDraftMeta("未检测到版本，请先新建企业");
         return;
       }
-      updateDraftMeta(`检测到 ${companies.length} 家企业草稿，可在顶部选择企业与版本`);
+      const totalVersions = companies.reduce((sum, item) => sum + (Number(item.versionCount) || 0), 0);
+      updateDraftMeta(`检测到 ${companies.length} 家企业、${totalVersions} 个版本（不做条数截断）`);
     }
 
     function getActiveDraftSelection() {

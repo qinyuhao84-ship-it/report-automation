@@ -44,6 +44,7 @@ NS = namespaces
 BODY_HEADING_PATTERN = re.compile(
     r"^\s*(图表|数据来源|来源网址|第[一二三四五六七八九十0-9]+章|[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|\([一二三四五六七八九十]+\)|\d+[\.、])"
 )
+CN_DIGITS = {0: "零", 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九"}
 
 def get_text(node):
     if node is None: return ""
@@ -219,6 +220,37 @@ def _run_is_underline(rpr: ET.Element) -> bool:
     value = str(node.get(f"{{{NS['w']}}}val") or "single").strip().lower()
     return value not in {"none", "0", "false", "off"}
 
+
+def _number_to_cn(num: int) -> str:
+    if num < 0:
+        return str(num)
+    if num < 10:
+        return CN_DIGITS[num]
+    if num == 10:
+        return "十"
+    if num < 20:
+        return "十" + CN_DIGITS[num % 10]
+    if num < 100:
+        tens, ones = divmod(num, 10)
+        return CN_DIGITS[tens] + "十" + (CN_DIGITS[ones] if ones else "")
+    return str(num)
+
+
+def _format_rank_text(raw_rank: str) -> str:
+    text = str(raw_rank or "").strip()
+    if not text:
+        return ""
+    matched = re.search(r"\d+", text)
+    if not matched:
+        return text
+    try:
+        rank_no = int(matched.group(0))
+    except ValueError:
+        return text
+    if rank_no < 1:
+        return text
+    return f"第{_number_to_cn(rank_no)}名"
+
 class SourceBlock(BaseModel):
     name: str
     url: str
@@ -329,6 +361,9 @@ def generate_docx_v4(data: dict, template_path, output_path):
         c for c in comp_data
         if str(c.get("name", "")).strip() and str(c.get("name", "")).strip() != company_name
     ]
+    rank_23_text = _format_rank_text(str(data.get("rank_23", "")))
+    rank_24_text = _format_rank_text(str(data.get("rank_24", "")))
+    rank_25_text = _format_rank_text(str(data.get("rank_25", "")))
     try:
         chart_series = build_chart_series_from_sources(srcs, context_label="数据来源")
     except ChartDataError as exc:
@@ -372,9 +407,9 @@ def generate_docx_v4(data: dict, template_path, output_path):
     # Fixed 0-15
     vals.extend([
         data.get("province", ""), data.get("company_name", ""), data.get("product_name", ""), data.get("product_code", ""),
-        data.get("sale_23", ""), data.get("total_mkt_23", ""), data.get("pct_23", ""), data.get("rank_23", ""),
-        data.get("sale_24", ""), data.get("total_mkt_24", ""), data.get("pct_24", ""), data.get("rank_24", ""),
-        data.get("sale_25", ""), data.get("total_mkt_25", ""), data.get("pct_25", ""), data.get("rank_25", "")
+        data.get("sale_23", ""), data.get("total_mkt_23", ""), data.get("pct_23", ""), rank_23_text,
+        data.get("sale_24", ""), data.get("total_mkt_24", ""), data.get("pct_24", ""), rank_24_text,
+        data.get("sale_25", ""), data.get("total_mkt_25", ""), data.get("pct_25", ""), rank_25_text
     ])
     
     # Field 16, 17 (Source meta 1 and 2, which don't dynamically scale in the intro text unfortunately)
@@ -396,8 +431,8 @@ def generate_docx_v4(data: dict, template_path, output_path):
             s["analysis"],
             s["chart_title"],
             "", # empty placeholder for chart image
-            f"数据来源：{s['url']}",
-            f"来源网址：{s['name']}"
+            f"数据来源：{s['name']}",
+            f"来源网址：{s['url']}"
         ])
         
     # Subsequent Fields
@@ -413,37 +448,96 @@ def generate_docx_v4(data: dict, template_path, output_path):
     vals.append("、".join(c_names))
     
     vals.extend([
-        data.get("company_name", ""),
-        data.get("company_name", ""),
-        data.get("sale_23", ""), data.get("pct_23", ""),
-        data.get("sale_24", ""), data.get("pct_24", ""),
-        data.get("sale_25", ""), data.get("pct_25", "")
+        data.get("company_name", "")
     ])
     
-    def clean_pct(p):
-        try: return float(p.replace('%', '').strip()) / 100.0
-        except: return 0.0
-    
-    def calc_sale(mkt, pct_str):
+    def parse_pct_ratio(p):
+        text = str(p or "").strip()
+        if not text:
+            return None
+        cleaned = text.replace('%', '').replace(',', '').strip()
         try:
-            m = float(mkt)
-            p = clean_pct(pct_str)
-            return f"{m * p:.2f}"
-        except: return "0.00"
+            ratio = float(cleaned)
+        except Exception:
+            return None
+        if "%" in text or ratio > 1:
+            ratio = ratio / 100.0
+        return ratio if ratio >= 0 else None
+
+    def parse_number(num_text):
+        text = str(num_text or "").replace(',', '').strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except Exception:
+            return None
+
+    def format_number(value):
+        if value is None:
+            return ""
+        text = f"{value:.2f}"
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text
+
+    def calc_sale(mkt, pct_str):
+        market = parse_number(mkt)
+        ratio = parse_pct_ratio(pct_str)
+        if market is None or ratio is None:
+            return ""
+        return format_number(market * ratio)
+
+    company_rows_for_table = []
+    company_rows_for_table.append({
+        "name": data.get("company_name", ""),
+        "sale_23": format_number(parse_number(data.get("sale_23", ""))),
+        "pct_23": data.get("pct_23", ""),
+        "sale_24": format_number(parse_number(data.get("sale_24", ""))),
+        "pct_24": data.get("pct_24", ""),
+        "sale_25": format_number(parse_number(data.get("sale_25", ""))),
+        "pct_25": data.get("pct_25", ""),
+        "ratio_25": parse_pct_ratio(data.get("pct_25", "")),
+        "is_self": True,
+    })
 
     for c in named_competitors:
+        sale_23 = parse_number(c.get("sale_23", ""))
+        sale_24 = parse_number(c.get("sale_24", ""))
+        sale_25 = parse_number(c.get("sale_25", ""))
+        company_rows_for_table.append({
+            "name": c["name"],
+            "sale_23": format_number(sale_23) if sale_23 is not None else calc_sale(data.get("total_mkt_23", ""), c["p23"]),
+            "pct_23": c["p23"],
+            "sale_24": format_number(sale_24) if sale_24 is not None else calc_sale(data.get("total_mkt_24", ""), c["p24"]),
+            "pct_24": c["p24"],
+            "sale_25": format_number(sale_25) if sale_25 is not None else calc_sale(data.get("total_mkt_25", ""), c["p25"]),
+            "pct_25": c["p25"],
+            "ratio_25": parse_pct_ratio(c["p25"]),
+            "is_self": False,
+        })
+
+    company_rows_for_table.sort(
+        key=lambda item: (
+            item["ratio_25"] is None,
+            -(item["ratio_25"] if item["ratio_25"] is not None else 0.0),
+            str(item.get("name", "")),
+        )
+    )
+
+    for row in company_rows_for_table:
         vals.extend([
-            c["name"],
-            calc_sale(data.get("total_mkt_23", ""), c["p23"]), c["p23"],
-            calc_sale(data.get("total_mkt_24", ""), c["p24"]), c["p24"],
-            calc_sale(data.get("total_mkt_25", ""), c["p25"]), c["p25"]
+            row["name"],
+            row["sale_23"], row["pct_23"],
+            row["sale_24"], row["pct_24"],
+            row["sale_25"], row["pct_25"]
         ])
         
     vals.extend([
         data.get("company_name", ""), data.get("product_name", ""),
-        data.get("pct_23", ""), f"（{data.get('rank_23', '')}）",
-        data.get("pct_24", ""), f"（{data.get('rank_24', '')}）",
-        data.get("pct_25", ""), f"（{data.get('rank_25', '')}）"
+        data.get("pct_23", ""), f"（{rank_23_text}）",
+        data.get("pct_24", ""), f"（{rank_24_text}）",
+        data.get("pct_25", ""), f"（{rank_25_text}）"
     ])
 
     # 5. Replacement pass
@@ -488,6 +582,9 @@ def generate_docx_v4(data: dict, template_path, output_path):
     )
     rewrite_summary_market_research_phrase(tree, str(data.get("product_name", "")).strip())
     _rewrite_self_dynamic_chart_references(tree, source_count=num_sources)
+    _rewrite_self_opening_requirement_sentence(tree)
+    _center_self_summary_table_cells(tree)
+    _bold_self_company_row_in_sales_table(tree, company_name=str(data.get("company_name", "")).strip())
     apply_body_plain_paragraph_justification(tree)
     try:
         inject_market_charts_into_docx(
@@ -503,11 +600,7 @@ def generate_docx_v4(data: dict, template_path, output_path):
         for n, d in file_map.items(): zout.writestr(n, d)
 
 
-def _apply_self_sales_table_structure(body: ET.Element, *, company_total: int) -> None:
-    if company_total < 1:
-        raise OtherProofError("企业数量异常，至少需要 1 家企业")
-
-    target_table = None
+def _find_self_sales_table(body: ET.Element) -> Optional[ET.Element]:
     for child in list(body):
         if child.tag != f"{{{NS['w']}}}tbl":
             continue
@@ -517,8 +610,15 @@ def _apply_self_sales_table_structure(body: ET.Element, *, company_total: int) -
         first_row_text = "".join(t.text or "" for t in rows[0].findall(".//w:t", namespaces=NS))
         second_row_text = "".join(t.text or "" for t in rows[1].findall(".//w:t", namespaces=NS))
         if "企业名称" in first_row_text and "2023年" in first_row_text and "销售额（万元）" in second_row_text:
-            target_table = child
-            break
+            return child
+    return None
+
+
+def _apply_self_sales_table_structure(body: ET.Element, *, company_total: int) -> None:
+    if company_total < 1:
+        raise OtherProofError("企业数量异常，至少需要 1 家企业")
+
+    target_table = _find_self_sales_table(body)
 
     if target_table is None:
         raise OtherProofError("模板缺少“2023~2025主要企业全国销售额情况”表格")
@@ -535,6 +635,89 @@ def _apply_self_sales_table_structure(body: ET.Element, *, company_total: int) -
         template_row = data_rows[-1]
         for _ in range(company_total - len(data_rows)):
             target_table.append(copy.deepcopy(template_row))
+
+
+def _rewrite_self_opening_requirement_sentence(tree: ET.Element) -> None:
+    for p in tree.findall(f".//{{{NS['w']}}}p"):
+        text = get_text(p)
+        if "根据" not in text or "申报工作要求" not in text:
+            continue
+        updated = re.sub(r"根据.*?申报工作要求", "根据申报工作要求", text, count=1)
+        if updated == text:
+            continue
+        set_paragraph_text(p, updated)
+        return
+
+
+def _center_self_summary_table_cells(tree: ET.Element) -> None:
+    body = tree.find(f".//{{{NS['w']}}}body")
+    if body is None:
+        return
+    target_table = None
+    for child in list(body):
+        if child.tag != f"{{{NS['w']}}}tbl":
+            continue
+        table_text = "".join(t.text or "" for t in child.findall(".//w:t", namespaces=NS))
+        normalized_text = re.sub(r"\s+", "", table_text)
+        if "企业名称" in normalized_text and "主导产品名称" in normalized_text and "2023年相关数据" in normalized_text:
+            target_table = child
+            break
+    if target_table is None:
+        return
+
+    for cell in target_table.findall(".//w:tc", namespaces=NS):
+        tcpr = cell.find("./w:tcPr", namespaces=NS)
+        if tcpr is None:
+            tcpr = ET.Element(f"{{{NS['w']}}}tcPr")
+            cell.insert(0, tcpr)
+        valign = tcpr.find("./w:vAlign", namespaces=NS)
+        if valign is None:
+            valign = ET.SubElement(tcpr, f"{{{NS['w']}}}vAlign")
+        valign.set(f"{{{NS['w']}}}val", "center")
+
+        for paragraph in cell.findall("./w:p", namespaces=NS):
+            ppr = paragraph.find("./w:pPr", namespaces=NS)
+            if ppr is None:
+                ppr = ET.Element(f"{{{NS['w']}}}pPr")
+                paragraph.insert(0, ppr)
+            jc = ppr.find("./w:jc", namespaces=NS)
+            if jc is None:
+                jc = ET.SubElement(ppr, f"{{{NS['w']}}}jc")
+            jc.set(f"{{{NS['w']}}}val", "center")
+
+
+def _set_row_bold(row: ET.Element) -> None:
+    for run in row.findall(".//w:r", namespaces=NS):
+        rpr = run.find("./w:rPr", namespaces=NS)
+        if rpr is None:
+            rpr = ET.Element(f"{{{NS['w']}}}rPr")
+            run.insert(0, rpr)
+        b = rpr.find("./w:b", namespaces=NS)
+        if b is None:
+            b = ET.SubElement(rpr, f"{{{NS['w']}}}b")
+        b.set(f"{{{NS['w']}}}val", "1")
+
+
+def _bold_self_company_row_in_sales_table(tree: ET.Element, company_name: str) -> None:
+    normalized_company = re.sub(r"\s+", "", str(company_name or ""))
+    if not normalized_company:
+        return
+    body = tree.find(f".//{{{NS['w']}}}body")
+    if body is None:
+        return
+    target_table = _find_self_sales_table(body)
+    if target_table is None:
+        return
+    rows = target_table.findall("./w:tr", namespaces=NS)
+    for row in rows[2:]:
+        first_cell = row.find("./w:tc", namespaces=NS)
+        if first_cell is None:
+            continue
+        cell_text = re.sub(r"\s+", "", get_text(first_cell))
+        if cell_text != normalized_company:
+            continue
+        _set_row_bold(row)
+        return
 
 
 def _rewrite_self_dynamic_chart_references(tree: ET.Element, *, source_count: int) -> None:

@@ -62,12 +62,15 @@ test('图表标题前缀自动生成，用户只填写后半句', () => {
   assert.match(html, /if \(block\.name \|\| block\.url \|\| suffix \|\| block\.analysis \|\| block\.chart_2023 \|\| block\.chart_2024 \|\| block\.chart_2025\) list\.push\(block\);/);
 });
 
-test('经营数据市场规模自动映射自最底层来源', () => {
-  assert.match(html, /<input id="total_mkt_23" readonly \/>/);
-  assert.match(html, /<input id="total_mkt_24" readonly \/>/);
-  assert.match(html, /<input id="total_mkt_25" readonly \/>/);
+test('经营数据市场规模支持手填且来源优先', () => {
+  assert.match(html, /<input id="total_mkt_23" oninput="onMarketInputChange\('23'\)" \/>/);
+  assert.match(html, /<input id="total_mkt_24" oninput="onMarketInputChange\('24'\)" \/>/);
+  assert.match(html, /<input id="total_mkt_25" oninput="onMarketInputChange\('25'\)" \/>/);
+  assert.match(html, /function onMarketInputChange\(year\) \{/);
   assert.match(html, /function syncBusinessMarketScaleFromSources\(\) \{/);
   assert.match(html, /const bottom = sources\.length \? sources\[sources\.length - 1\] : null;/);
+  assert.match(html, /if \(nextValue && input\.value !== nextValue\) \{/);
+  assert.match(html, /function resolveEffectiveMarketScale\(year, sources\) \{/);
   assert.match(html, /function convertMarketScaleYiToWan\(rawValue\) \{/);
   assert.match(html, /const wanValue = yiValue \* 10000;/);
   assert.match(html, /syncBusinessMarketScaleFromSources\(\);\s*const company = document\.getElementById\("company_name"\)\.value\.trim\(\);/);
