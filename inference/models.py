@@ -112,7 +112,7 @@ def _default_llm_api_key_env():
 
 
 def _default_llm_model():
-    return _normalize_optional_text(os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-reasoner")
+    return _normalize_optional_text(os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-r1")
 
 
 class InferenceInput(BaseModel):
