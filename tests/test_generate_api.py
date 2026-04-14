@@ -112,8 +112,9 @@ def test_generate_requires_template_type():
 def test_other_chapter1_endpoint_returns_sections(monkeypatch):
     client = TestClient(app_module.app)
 
-    def fake_generate_other_chapter1(product_name, _config):
+    def fake_generate_other_chapter1(product_name, _config, allow_partial=False):
         assert product_name == "示例产品"
+        assert allow_partial is False
         return {
             "sections": [
                 {"key": "background_overview", "title": "背景与概述", "paragraphs": ["段落1", "段落2"]},
@@ -134,7 +135,8 @@ def test_other_chapter1_endpoint_returns_sections(monkeypatch):
 def test_other_chapter1_endpoint_returns_504_on_timeout(monkeypatch):
     client = TestClient(app_module.app)
 
-    def fake_generate_other_chapter1(_product_name, _config):
+    def fake_generate_other_chapter1(_product_name, _config, allow_partial=False):
+        assert allow_partial is False
         raise app_module.OtherProofTimeoutError("第一章生成超时。你可以直接重试，或勾选“第一章失败后跳过继续生成”。")
 
     monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
@@ -143,6 +145,22 @@ def test_other_chapter1_endpoint_returns_504_on_timeout(monkeypatch):
 
     assert resp.status_code == 504
     assert "第一章生成超时" in resp.json().get("detail", "")
+
+
+def test_other_chapter1_endpoint_passes_allow_partial(monkeypatch):
+    client = TestClient(app_module.app)
+
+    def fake_generate_other_chapter1(product_name, _config, allow_partial=False):
+        assert product_name == "示例产品"
+        assert allow_partial is True
+        return {"sections": [], "warnings": ["allow_partial=true"]}
+
+    monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
+
+    resp = client.post("/other-proof/chapter1", json={"product_name": "示例产品", "allow_partial": True})
+
+    assert resp.status_code == 200
+    assert resp.json().get("warnings") == ["allow_partial=true"]
 
 
 def test_rewrite_header_titles_updates_matching_header_paragraph():

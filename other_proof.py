@@ -82,7 +82,7 @@ class OtherProofTimeoutError(OtherProofError):
     pass
 
 
-def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[str, Any]:
+def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_partial: bool = False) -> Dict[str, Any]:
     if not product_name or not product_name.strip():
         raise OtherProofError("主导产品名称不能为空")
 
@@ -90,77 +90,52 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
     if not orchestrator.is_available() or orchestrator.client is None:
         raise OtherProofError("LLM 未配置，无法生成他证第一章")
 
-    prompt = _build_chapter1_prompt(product_name.strip())
-    chapter1_messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是产业研究分析师。"
-                "严格按用户给定结构生成内容。"
-                "只输出 JSON，不要输出解释，不要输出 Markdown 代码块。"
-                "不得编造企业私有信息。"
-            ),
-        },
-        {"role": "user", "content": prompt},
-    ]
-    retry_attempts = max(1, min(config.llm_retry_attempts + 1, 2))
+    product = product_name.strip()
     chapter1_timeout_seconds = max(20, int(config.llm_timeout_seconds))
-    # 第一章结构复杂，显式给更高输出预算，避免被模型默认上限截断。
-    chapter1_max_output_tokens = max(3000, int(config.llm_max_output_tokens))
+    chapter1_max_output_tokens = max(1200, min(int(config.llm_max_output_tokens), 2400))
     chapter1_model = _resolve_chapter1_model_name(
         config.llm_model,
         getattr(orchestrator.client, "model", "") or config.llm_model,
     )
+    raw_sections: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    successful_sections = 0
 
-    last_timeout_error: Exception | None = None
-    raw = ""
-    for attempt in range(retry_attempts):
+    for spec in CHAPTER1_SECTION_SPECS:
+        key = spec["key"]
+        title = spec["title"]
         try:
-            raw = orchestrator.client.complete(
-                chapter1_messages,
+            section_raw, section_warning = _generate_chapter1_section(
+                client=orchestrator.client,
+                product_name=product,
+                spec=spec,
                 model=chapter1_model,
-                temperature=0.2,
-                max_output_tokens=chapter1_max_output_tokens,
                 timeout_seconds=chapter1_timeout_seconds,
+                max_output_tokens=chapter1_max_output_tokens,
+                generated_sections=raw_sections,
             )
-            if not str(raw or "").strip():
-                last_timeout_error = RuntimeError("LLM 返回为空")
-                continue
-            last_timeout_error = None
-            break
+            raw_sections.append(section_raw)
+            successful_sections += 1
+            if section_warning:
+                warnings.append(f"第一章《{title}》{section_warning}")
         except Exception as exc:
-            if _is_timeout_error(exc):
-                last_timeout_error = exc
-                continue
-            raise
+            if not allow_partial:
+                raise OtherProofTimeoutError(
+                    f"第一章《{title}》生成失败，请重试。若需继续生成，可勾选“第一章失败后跳过继续生成”。"
+                ) from exc
+            warnings.append(f"第一章《{title}》生成失败，已写入占位内容")
 
-    mode_warning = ""
-    if last_timeout_error is not None:
-        raw = _try_generate_other_chapter1_fast(
-            client=orchestrator.client,
-            product_name=product_name.strip(),
-            model=chapter1_model,
-            timeout_seconds=chapter1_timeout_seconds,
-            max_output_tokens=chapter1_max_output_tokens,
+    if successful_sections == 0:
+        raise OtherProofTimeoutError(
+            "第一章生成超时。你可以直接重试，或勾选“第一章失败后跳过继续生成”。"
         )
-        if not str(raw or "").strip():
-            raise OtherProofTimeoutError(
-                "第一章生成超时。你可以直接重试，或勾选“第一章失败后跳过继续生成”。"
-            ) from last_timeout_error
-        mode_warning = "第一章标准模式超时，系统已切换快速模式生成"
 
-    parse_warning = ""
-    try:
-        parsed = _extract_json_payload(raw)
-        raw_sections = parsed.get("sections")
-    except OtherProofError:
-        raw_sections, parse_warning = _coerce_chapter1_sections_from_text(raw)
-
-    normalized, warnings = normalize_chapter1_sections(raw_sections)
+    normalized, normalize_warnings = normalize_chapter1_sections(raw_sections)
+    warnings.extend(normalize_warnings)
     normalized, repair_warnings, repaired_keys = _repair_empty_chapter1_sections(
         client=orchestrator.client,
         model=chapter1_model,
-        product_name=product_name.strip(),
+        product_name=product,
         sections=normalized,
         timeout_seconds=chapter1_timeout_seconds,
         max_output_tokens=chapter1_max_output_tokens,
@@ -180,26 +155,71 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig) -> Dict[
             )
         ]
     warnings.extend(repair_warnings)
-    if mode_warning:
-        warnings.insert(0, mode_warning)
-    if parse_warning:
-        warnings.insert(0, parse_warning)
+    if not allow_partial:
+        strict_failed_titles = []
+        for spec in CHAPTER1_SECTION_SPECS:
+            section = next((item for item in normalized if str(item.get("key") or "").strip() == spec["key"]), None)
+            paragraphs = section.get("paragraphs") if isinstance(section, dict) else []
+            non_placeholder = [item for item in (paragraphs or []) if str(item).strip() and str(item).strip() != PLACEHOLDER_TEXT]
+            if not non_placeholder:
+                strict_failed_titles.append(spec["title"])
+        if strict_failed_titles:
+            raise OtherProofTimeoutError("第一章关键小节生成失败：" + "、".join(strict_failed_titles))
+
     return {"sections": normalized, "warnings": warnings}
 
 
-def _is_timeout_error(exc: Exception) -> bool:
-    if isinstance(exc, httpx.TimeoutException):
-        return True
-    if isinstance(exc, (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError, httpx.ConnectError)):
-        return True
-    text = str(exc).strip().lower()
-    return (
-        "timed out" in text
-        or "timeout" in text
-        or "connection reset" in text
-        or "remote end closed connection" in text
-        or "empty reply" in text
+def _generate_chapter1_section(
+    *,
+    client: Any,
+    product_name: str,
+    spec: Dict[str, Any],
+    model: str,
+    timeout_seconds: int,
+    max_output_tokens: int,
+    generated_sections: Sequence[Dict[str, Any]],
+) -> tuple[Dict[str, Any], str]:
+    section_key = str(spec["key"])
+    section_title = str(spec["title"])
+    section_messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是产业研究分析师。"
+                "当前仅生成一个章节。"
+                "只输出 JSON，不要解释，不要 Markdown 代码块。"
+                "不得编造企业私有信息。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": _build_chapter1_section_prompt(
+                product_name=product_name,
+                spec=spec,
+                generated_sections=generated_sections,
+            ),
+        },
+    ]
+    raw = client.complete(
+        section_messages,
+        model=model,
+        temperature=0.2,
+        max_output_tokens=max_output_tokens,
+        timeout_seconds=timeout_seconds,
+        section_key=section_key,
     )
+    warning = ""
+    paragraphs: List[str] = []
+    try:
+        parsed = _extract_json_payload(raw)
+        paragraphs = _extract_section_paragraphs(parsed, section_key)
+    except OtherProofError:
+        paragraphs, warning = _coerce_chapter1_section_paragraphs_from_text(raw)
+
+    cleaned = [str(item).strip() for item in paragraphs if str(item).strip()]
+    if not cleaned:
+        raise RuntimeError(f"第一章《{section_title}》返回为空")
+    return {"key": section_key, "title": section_title, "paragraphs": cleaned}, warning
 
 
 def _resolve_chapter1_model_name(config_model: str, fallback_model: str) -> str:
@@ -208,37 +228,6 @@ def _resolve_chapter1_model_name(config_model: str, fallback_model: str) -> str:
     if lower == "deepseek-reasoner":
         return "deepseek-chat"
     return model or fallback_model
-
-
-def _try_generate_other_chapter1_fast(
-    *,
-    client: Any,
-    product_name: str,
-    model: str,
-    timeout_seconds: int,
-    max_output_tokens: int,
-) -> str:
-    fast_messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是产业研究分析师。"
-                "只输出 JSON，不要输出解释。"
-                "禁止 Markdown 代码块。"
-            ),
-        },
-        {"role": "user", "content": _build_chapter1_fast_prompt(product_name)},
-    ]
-    try:
-        return client.complete(
-            fast_messages,
-            model=model,
-            temperature=0.1,
-            max_output_tokens=max_output_tokens,
-            timeout_seconds=timeout_seconds,
-        )
-    except Exception:
-        return ""
 
 
 
@@ -1830,16 +1819,106 @@ def _extract_sections_from_json_like_text(text: str) -> List[Dict[str, Any]]:
     return [section_map[spec["key"]] for spec in CHAPTER1_SECTION_SPECS]
 
 
-def _build_chapter1_fast_prompt(product_name: str) -> str:
-    keys = ", ".join(f"{item['key']}（{item['title']}）" for item in CHAPTER1_SECTION_SPECS)
+def _extract_section_paragraphs(payload: Any, section_key: str) -> List[str]:
+    target = payload if isinstance(payload, dict) else {}
+    section_obj: Dict[str, Any] = {}
+    direct = target.get("section")
+    if isinstance(direct, dict):
+        section_obj = direct
+    else:
+        sections = target.get("sections")
+        if isinstance(sections, list):
+            for item in sections:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("key") or "").strip() == section_key:
+                    section_obj = item
+                    break
+            if not section_obj:
+                for item in sections:
+                    if isinstance(item, dict):
+                        section_obj = item
+                        break
+    if not section_obj:
+        raise OtherProofError("第一章小节 JSON 结构缺失")
+
+    paragraphs = section_obj.get("paragraphs")
+    if not isinstance(paragraphs, list):
+        raise OtherProofError("第一章小节 paragraphs 不是数组")
+    return [str(item).strip() for item in paragraphs if str(item).strip()]
+
+
+def _build_chapter1_context_excerpt(generated_sections: Sequence[Dict[str, Any]], limit: int = 3) -> str:
+    snippets: List[str] = []
+    for section in generated_sections[-limit:]:
+        if not isinstance(section, dict):
+            continue
+        title = str(section.get("title") or "").strip()
+        paragraphs = section.get("paragraphs")
+        if not isinstance(paragraphs, list):
+            continue
+        non_empty = [str(item).strip() for item in paragraphs if str(item).strip()]
+        if not non_empty:
+            continue
+        snippets.append(f"- {title}：{non_empty[-1]}")
+    if not snippets:
+        return "（暂无已生成小节）"
+    return "\n".join(snippets)
+
+
+def _chapter1_style_constraints_text() -> str:
+    return (
+        "写作风格约束：\n"
+        "A. 采用咨询报告/研究报告风格，语气克制、严谨、客观，不使用夸张或营销表达。\n"
+        "B. 全文使用连贯整段叙述，不写大纲式短句，不写“标题+冒号+解释”的句式。\n"
+        "C. 正文尽量避免使用冒号“：”，除非必须用于术语说明，且单段最多出现 1 次。\n"
+        "D. 不写任何具体统计数据、金额、比例、增速、年份、排名、市场份额等量化信息。\n"
+        "E. 内容必须与产品强相关，至少围绕产品定位、技术特征、应用场景、产业链位置展开。\n"
+        "F. 段落之间要有自然衔接，避免机械重复和 AI 套话（如“首先/其次/最后”的模板串联）。\n"
+    )
+
+
+def _coerce_chapter1_section_paragraphs_from_text(raw_text: str) -> tuple[List[str], str]:
+    text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return [], "返回为空，已改写为占位"
+    blocks = [item.strip() for item in re.split(r"\n{2,}", text) if item.strip()]
+    paragraphs = [item for item in blocks if len(re.sub(r"\s+", "", item)) >= 12]
+    if not paragraphs:
+        paragraphs = [line.strip() for line in text.split("\n") if line.strip() and len(line.strip()) >= 12]
+    return paragraphs, "返回了非标准 JSON，已自动解析"
+
+
+def _build_chapter1_section_prompt(
+    *,
+    product_name: str,
+    spec: Dict[str, Any],
+    generated_sections: Sequence[Dict[str, Any]],
+) -> str:
+    key = str(spec["key"])
+    title = str(spec["title"])
+    slot_count = int(spec.get("slot_count", 6))
+    min_paragraphs = max(2, min(8, slot_count // 3))
+    chapter_outline = "\n".join(f"- {item['title']}" for item in CHAPTER1_SECTION_SPECS)
+    context_excerpt = _build_chapter1_context_excerpt(generated_sections)
+    style_constraints = _chapter1_style_constraints_text()
     return (
         f"产品：{product_name}\n"
-        "请快速生成第一章 JSON。\n"
+        "任务背景：你正在写一份“行业研究报告”的第一章，最终要把所有小节拼接为一篇连贯正文。\n"
+        "第一章完整小节目录（按顺序）：\n"
+        f"{chapter_outline}\n"
+        "已完成小节摘录（用于上下文衔接，避免重复）：\n"
+        f"{context_excerpt}\n"
+        f"请仅生成第一章中的一个小节：{title}。\n"
         "要求：\n"
-        "1) 仅输出 JSON：{\"sections\":[...]}。\n"
-        f"2) sections 必须包含以下 key：{keys}。\n"
-        "3) 每个 key 至少 2 段，每段 90-160 字，避免只写标题短语。\n"
-        "4) industry_supply_chain 至少 6 段：总述 1 段 +（一）到（五）五个小分类各 1 段。\n"
+        "1) 仅输出 JSON，不要输出解释，不要 Markdown。\n"
+        f'2) JSON 格式固定为：{{"section":{{"key":"{key}","title":"{title}","paragraphs":["..."]}}}}。\n'
+        f"3) paragraphs 至少 {min_paragraphs} 段，每段 110-220 字，段落必须是完整陈述句。\n"
+        "4) 禁止输出小标题短语、项目符号和清单式罗列。\n"
+        "5) 不得编造企业私有信息，不要写“待补充”。\n"
+        "6) 与已完成小节保持术语和叙述口径一致，行文必须可直接拼接。\n"
+        "7) 每个段落都要围绕该产品本身，不允许写成脱离产品的泛行业空话。\n"
+        f"{style_constraints}"
     )
 
 
@@ -1854,12 +1933,14 @@ def _build_chapter1_repair_prompt(product_name: str, specs: Sequence[Dict[str, A
             "段落应是完整陈述句。"
         )
     requirements = "\n".join(lines)
+    style_constraints = _chapter1_style_constraints_text()
     return (
         f"产品：{product_name}\n"
         "以下章节在第一轮生成中缺失，请只补写这些章节。\n"
         "只输出 JSON，格式：{\"sections\":[{\"key\":\"...\",\"title\":\"...\",\"paragraphs\":[\"...\"]}]}\n"
         "要求：\n"
         f"{requirements}\n"
+        f"{style_constraints}"
         "不要输出任何 JSON 之外的文本。"
     )
 

@@ -298,6 +298,7 @@ class CompanyLookupItem(BaseModel):
 
 class Chapter1Request(BaseModel):
     product_name: str
+    allow_partial: bool = False
 
 
 class CompanyLookupRequest(BaseModel):
@@ -771,7 +772,11 @@ OTHER_TEMPLATE_PATH = "0323-高安全性自锁紧型电源连接系统市场占�
 @app.post("/other-proof/chapter1")
 def generate_other_proof_chapter1_api(payload: Chapter1Request):
     try:
-        return generate_other_chapter1(payload.product_name, InferenceConfig())
+        return generate_other_chapter1(
+            payload.product_name,
+            InferenceConfig(),
+            allow_partial=bool(payload.allow_partial),
+        )
     except OtherProofTimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc))
     except OtherProofError as exc:

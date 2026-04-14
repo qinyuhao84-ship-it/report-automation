@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import xml.etree.ElementTree as ET
 
 import httpx
 import other_proof
+import pytest
 from other_proof import (
     _build_chart_number_plan,
     _build_chapter1_prompt,
+    _build_chapter1_section_prompt,
     _build_company_rows,
     _highlight_self_row_in_comparison_table,
     _rewrite_summary_market_research_phrase,
@@ -31,6 +34,23 @@ def test_chapter1_prompt_uses_report_style_requirements():
     assert "industry_supply_chain 必须包含“（一）到（五）”五个小分类" in prompt
 
 
+def test_chapter1_section_prompt_has_consulting_style_constraints():
+    spec = {"key": "industry_trends", "title": "行业发展趋势", "slot_count": 28}
+    prompt = _build_chapter1_section_prompt(
+        product_name="高安全性自锁紧型电源连接系统",
+        spec=spec,
+        generated_sections=[
+            {"key": "definition", "title": "定义", "paragraphs": ["该产品面向高可靠连接场景。"]},
+        ],
+    )
+
+    assert "咨询报告/研究报告风格" in prompt
+    assert "不写任何具体统计数据" in prompt
+    assert "尽量避免使用冒号" in prompt
+    assert "围绕该产品本身" in prompt
+    assert '"section"' in prompt
+
+
 def test_generate_other_chapter1_caps_request_budget(monkeypatch):
     class FakeClient:
         def __init__(self):
@@ -47,19 +67,18 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
         def is_available(self):
             return True
 
-    json_payload = (
-        '{"sections":['
-        '{"key":"background_overview","title":"背景与概述","paragraphs":["背景段落"]},'
-        '{"key":"definition","title":"定义","paragraphs":["定义段落"]},'
-        '{"key":"working_principle","title":"工作原理","paragraphs":["工作原理段落"]},'
-        '{"key":"product_attributes","title":"产品属性","paragraphs":["属性段落"]},'
-        '{"key":"technical_specifications","title":"技术规范","paragraphs":["规范段落"]},'
-        '{"key":"industry_history","title":"行业发展历程","paragraphs":["历程段落"]},'
-        '{"key":"industry_environment","title":"行业发展环境","paragraphs":["环境段落"]},'
-        '{"key":"industry_trends","title":"行业发展趋势","paragraphs":["趋势段落"]},'
-        '{"key":"industry_supply_chain","title":"行业供应链","paragraphs":["（一）上游","（二）中游","（三）下游","（四）渠道","（五）风险"]}'
-        ']}'
-    )
+    def _payload(key):
+        return json.dumps(
+            {
+                "section": {
+                    "key": key,
+                    "title": other_proof.CHAPTER1_SPEC_MAP[key]["title"],
+                    "paragraphs": [f"{key} 段落 A", f"{key} 段落 B"],
+                }
+            },
+            ensure_ascii=False,
+        )
+
     fake_client = FakeClient()
 
     def fake_from_config(_config):
@@ -70,15 +89,26 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
     config = other_proof.InferenceConfig(
         llm_timeout_seconds=300,
         llm_max_output_tokens=8192,
-        llm_retry_attempts=5,
     )
-    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", config)
+    original_complete = fake_client.complete
+
+    def complete_with_key(messages, **kwargs):
+        fake_client.calls.append({"messages": messages, "kwargs": kwargs})
+        key = kwargs.get("section_key", "")
+        if key not in other_proof.CHAPTER1_SPEC_MAP:
+            raise AssertionError("missing section_key")
+        return _payload(key)
+
+    fake_client.complete = complete_with_key
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", config, allow_partial=False)
+    fake_client.complete = original_complete
 
     assert len(result["sections"]) == 9
-    assert fake_client.calls, "LLM client should be called"
+    assert len(fake_client.calls) == 9
     kwargs = fake_client.calls[0]["kwargs"]
     assert kwargs["timeout_seconds"] == 300
-    assert kwargs["max_output_tokens"] == 8192
+    assert kwargs["max_output_tokens"] == 2400
+    assert kwargs["section_key"] == "background_overview"
 
 
 def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
@@ -102,34 +132,30 @@ def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
     try:
         generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
     except other_proof.OtherProofTimeoutError as exc:
-        assert "第一章生成超时" in str(exc)
+        assert "背景与概述" in str(exc)
     else:
         raise AssertionError("expected OtherProofTimeoutError")
 
 
-def test_generate_other_chapter1_uses_fast_mode_after_timeout(monkeypatch):
+def test_generate_other_chapter1_allow_partial_writes_placeholders(monkeypatch):
     class FakeClient:
         def __init__(self):
             self.calls = []
-            self.count = 0
 
         def complete(self, messages, **kwargs):
             self.calls.append({"messages": messages, "kwargs": kwargs})
-            self.count += 1
-            if self.count <= 2:
+            key = kwargs.get("section_key", "")
+            if key in {"background_overview", "definition"}:
                 raise httpx.ReadTimeout("timed out")
-            return (
-                '{"sections":['
-                '{"key":"background_overview","title":"背景与概述","paragraphs":["背景段落"]},'
-                '{"key":"definition","title":"定义","paragraphs":["定义段落"]},'
-                '{"key":"working_principle","title":"工作原理","paragraphs":["工作原理段落"]},'
-                '{"key":"product_attributes","title":"产品属性","paragraphs":["属性段落"]},'
-                '{"key":"technical_specifications","title":"技术规范","paragraphs":["规范段落"]},'
-                '{"key":"industry_history","title":"行业发展历程","paragraphs":["历程段落"]},'
-                '{"key":"industry_environment","title":"行业发展环境","paragraphs":["环境段落"]},'
-                '{"key":"industry_trends","title":"行业发展趋势","paragraphs":["趋势段落"]},'
-                '{"key":"industry_supply_chain","title":"行业供应链","paragraphs":["（一）上游 （二）中游 （三）下游 （四）渠道 （五）风险"]}'
-                ']}'
+            return json.dumps(
+                {
+                    "section": {
+                        "key": key,
+                        "title": other_proof.CHAPTER1_SPEC_MAP[key]["title"],
+                        "paragraphs": [f"{key} 正常段落 1", f"{key} 正常段落 2"],
+                    }
+                },
+                ensure_ascii=False,
             )
 
     class FakeOrchestrator:
@@ -146,58 +172,43 @@ def test_generate_other_chapter1_uses_fast_mode_after_timeout(monkeypatch):
         staticmethod(lambda _config: FakeOrchestrator(fake_client)),
     )
 
-    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig(), allow_partial=True)
 
     assert len(result["sections"]) == 9
-    assert any("快速模式" in item for item in result["warnings"])
-    assert len(fake_client.calls) == 3
-    assert fake_client.calls[2]["kwargs"]["max_output_tokens"] == 3000
-    assert fake_client.calls[2]["kwargs"]["timeout_seconds"] == 60
+    assert any("背景与概述" in item and "生成失败" in item for item in result["warnings"])
+    assert any("定义" in item and "生成失败" in item for item in result["warnings"])
+    background = next(item for item in result["sections"] if item["key"] == "background_overview")
+    assert all(p == other_proof.PLACEHOLDER_TEXT for p in background["paragraphs"])
+
+
+def test_generate_other_chapter1_allow_partial_all_failed_raises_timeout(monkeypatch):
+    class FakeClient:
+        def complete(self, *_args, **_kwargs):
+            raise httpx.ReadTimeout("timed out")
+
+    class FakeOrchestrator:
+        def __init__(self):
+            self.client = FakeClient()
+
+        def is_available(self):
+            return True
+
+    monkeypatch.setattr(
+        other_proof.LLMOrchestrator,
+        "from_config",
+        staticmethod(lambda _config: FakeOrchestrator()),
+    )
+
+    with pytest.raises(other_proof.OtherProofTimeoutError) as exc_info:
+        generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig(), allow_partial=True)
+    assert "第一章生成超时" in str(exc_info.value)
 
 
 def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatch):
     plain_text = """
-一、背景与概述
-该产品面向高可靠连接场景，强调在复杂工况下的稳定供电与连接安全。
+高安全性自锁紧型电源连接系统处于高可靠连接赛道，核心价值是提升复杂工况下供电连接稳定性。
 
-二、基本概念
-（一）定义
-高安全性自锁紧型电源连接系统，是通过自锁结构与防误插设计保障连接稳定性的电源连接方案。
-
-（二）工作原理
-系统通过插拔配合、自锁保持与防松脱结构，维持长期电气连接稳定。
-
-（三）产品属性
-产品具备高防护等级、抗振动和长寿命等属性。
-
-（四）技术规范
-设计遵循电气安全与连接器相关标准体系。
-
-三、行业发展历程
-行业经历了从通用连接向高可靠、高安全方向持续升级。
-
-四、行业发展环境和趋势
-（一）行业发展环境
-新能源和高端制造场景扩张，推动高安全连接需求增长。
-
-（二）行业发展趋势
-产品形态向小型化、模块化和智能监测能力融合演进。
-
-五、行业供应链
-（一）上游原材料与核心零部件
-铜材、工程塑料与精密端子是关键投入。
-
-（二）中游制造与装配环节
-中游依赖精密加工与自动化装配能力。
-
-（三）下游应用行业与客户结构
-下游覆盖新能源装备、工业控制与轨道交通。
-
-（四）渠道流通与交付协同
-项目型客户更关注交付一致性与售后响应。
-
-（五）供应链风险与优化趋势
-供应链趋向多源化与本地化协同，降低交付风险。
+行业需求由新能源、电力装备、轨道交通等场景共同拉动，市场关注点持续转向安全冗余和维护便利性。
 """.strip()
 
     class FakeClient:
@@ -219,10 +230,10 @@ def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatc
 
     result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
     assert len(result["sections"]) == 9
-    assert any("非 JSON 文本" in item for item in result["warnings"])
+    assert any("非标准 JSON" in item for item in result["warnings"])
     section_map = {item["key"]: item for item in result["sections"]}
     assert "高安全性自锁紧型电源连接系统" in section_map["definition"]["paragraphs"][0]
-    assert "供应链" in " ".join(section_map["industry_supply_chain"]["paragraphs"])
+    assert any("行业需求" in p for p in section_map["industry_supply_chain"]["paragraphs"])
 
 
 def test_normalize_chapter1_sections_merges_heading_fragments():

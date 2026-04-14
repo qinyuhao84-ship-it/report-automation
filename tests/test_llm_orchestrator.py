@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from inference import llm_orchestrator as llm_module
 from inference.llm_orchestrator import LLMOrchestrator, OpenAICompatibleClient
 from inference.models import InferenceConfig, InferenceInput
 from inference.providers import ProviderHit
@@ -198,3 +199,55 @@ def test_llm_orchestrator_disabled_without_credentials(sample_input):
         evidence_summary=[],
         fallback_query="fallback query",
     ) is None
+
+
+def test_openai_client_retries_on_429_then_succeeds(monkeypatch):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(429, json={"error": "rate limit"}, request=request, headers={"Retry-After": "1"})
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"ok": true}'}}]},
+            request=request,
+        )
+
+    sleep_values = []
+    monkeypatch.setattr(llm_module.time, "sleep", lambda seconds: sleep_values.append(seconds))
+
+    client = OpenAICompatibleClient(
+        api_base="https://proxy.example.com/v1",
+        api_key="sk-test",
+        model="gpt-5.1-codex",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        retry_max_attempts=3,
+        retry_base_delay_ms=800,
+        retry_max_delay_ms=8000,
+    )
+
+    content = client.complete([{"role": "user", "content": "hi"}], section_key="background_overview")
+    assert calls["count"] == 2
+    assert sleep_values == [1.0]
+    assert '"ok": true' in content
+
+
+def test_openai_client_does_not_retry_on_400():
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(400, json={"error": "bad request"}, request=request)
+
+    client = OpenAICompatibleClient(
+        api_base="https://proxy.example.com/v1",
+        api_key="sk-test",
+        model="gpt-5.1-codex",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        retry_max_attempts=3,
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.complete([{"role": "user", "content": "hi"}], section_key="definition")
+    assert calls["count"] == 1

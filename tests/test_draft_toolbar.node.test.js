@@ -46,8 +46,8 @@ test('第一章按企业缓存：跨版本复用，不写入版本快照', () =>
 test('第一章重新生成只能显式触发', () => {
   assert.match(html, /onclick="regenerateOtherChapter1\(\)"/);
   assert.match(html, /async function regenerateOtherChapter1\(\) \{/);
-  assert.match(html, /ensureOtherChapter1\(true\)/);
-  assert.match(html, /ensureOtherChapter1\(false\)/);
+  assert.match(html, /ensureOtherChapter1\(true,\s*false\)/);
+  assert.match(html, /ensureOtherChapter1\(false,\s*skipChapter1OnFailure\)/);
 });
 
 test('图表标题前缀自动生成，用户只填写后半句', () => {

@@ -1969,7 +1969,7 @@
       setChapter1RunningState(false);
     }
 
-    async function ensureOtherChapter1(force = false) {
+    async function ensureOtherChapter1(force = false, allowPartial = false) {
       const product = document.getElementById("product_name").value.trim();
       if (!product) {
         setStatus("请先填写主导产品名称", "error");
@@ -2004,7 +2004,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: otherChapter1AbortController.signal,
-          body: JSON.stringify({ product_name: product }),
+          body: JSON.stringify({ product_name: product, allow_partial: !!allowPartial }),
         });
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
@@ -2046,7 +2046,7 @@
         setStatus("请先切换到“他证模板”后再重新生成第一章", "error");
         return;
       }
-      const ok = await ensureOtherChapter1(true);
+      const ok = await ensureOtherChapter1(true, false);
       if (ok) setStatus("第一章已重新生成");
     }
 
@@ -2159,10 +2159,10 @@
         }
 
         setStatus("正在生成第一章...");
-        const chapter1Ready = await ensureOtherChapter1(false);
+        const skipChapter1OnFailure = document.getElementById("skipChapter1OnFailure")?.checked === true;
+        const chapter1Ready = await ensureOtherChapter1(false, skipChapter1OnFailure);
         if (!chapter1Ready) {
           if (chapter1AbortHappened) return;
-          const skipChapter1OnFailure = document.getElementById("skipChapter1OnFailure")?.checked === true;
           if (!skipChapter1OnFailure) return;
           otherProofChapter1Sections = [];
           updateChapter1State("第一章：生成失败，已跳过并写入占位内容");

@@ -99,7 +99,7 @@ def _default_llm_api_base():
 
 def _default_llm_enabled():
     api_base = _default_llm_api_base()
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "sk-539bfb607ee749ceb4174358c5fb1ea9"
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
     return bool(api_base and api_key)
 
 
@@ -245,7 +245,7 @@ class InferenceConfig(BaseModel):
     cny_per_usd: float = Field(default=7.2, gt=0)
     llm_enabled: bool = Field(default_factory=_default_llm_enabled)
     llm_api_base: Optional[str] = Field(default_factory=_default_llm_api_base)
-    llm_api_key_env: str = Field(default="sk-539bfb607ee749ceb4174358c5fb1ea9")
+    llm_api_key_env: str = Field(default="OPENAI_API_KEY")
     llm_model: str = Field(default_factory=_default_llm_model)
     llm_planning_model: Optional[str] = None
     llm_extraction_model: Optional[str] = None
@@ -253,7 +253,9 @@ class InferenceConfig(BaseModel):
     llm_max_output_tokens: int = Field(default=1200, ge=64, le=8192)
     llm_planning_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     llm_extraction_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    llm_retry_attempts: int = Field(default=2, ge=0, le=5)
+    llm_retry_max_attempts: int = Field(default=3, ge=0, le=8)
+    llm_retry_base_delay_ms: int = Field(default=800, ge=100, le=5000)
+    llm_retry_max_delay_ms: int = Field(default=8000, ge=500, le=20000)
     llm_user_agent: str = Field(default="report-automation")
     providers: List[ProviderConfig] = Field(
         default_factory=lambda: [
@@ -429,6 +431,8 @@ class InferConfigPatch(BaseModel):
     llm_max_output_tokens: Optional[int] = Field(default=None, ge=64, le=8192)
     llm_planning_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     llm_extraction_temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    llm_retry_attempts: Optional[int] = Field(default=None, ge=0, le=5)
+    llm_retry_max_attempts: Optional[int] = Field(default=None, ge=0, le=8)
+    llm_retry_base_delay_ms: Optional[int] = Field(default=None, ge=100, le=5000)
+    llm_retry_max_delay_ms: Optional[int] = Field(default=None, ge=500, le=20000)
     llm_user_agent: Optional[str] = None
     providers: Optional[List[ProviderConfig]] = None

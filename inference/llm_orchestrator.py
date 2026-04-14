@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import random
 import re
 import time
+from email.utils import parsedate_to_datetime
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
 from .models import InferenceConfig, InferenceInput
 from .providers import ProviderHit
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_text(value: Any) -> str:
@@ -204,6 +210,9 @@ class OpenAICompatibleClient:
         timeout_seconds: int = 60,
         max_output_tokens: int = 1200,
         user_agent: str = "report-automation",
+        retry_max_attempts: int = 3,
+        retry_base_delay_ms: int = 800,
+        retry_max_delay_ms: int = 8000,
         transport: Optional[httpx.BaseTransport] = None,
         client: Optional[httpx.Client] = None,
     ) -> None:
@@ -213,6 +222,9 @@ class OpenAICompatibleClient:
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens = max_output_tokens
         self.user_agent = user_agent
+        self.retry_max_attempts = max(0, int(retry_max_attempts))
+        self.retry_base_delay_ms = max(1, int(retry_base_delay_ms))
+        self.retry_max_delay_ms = max(self.retry_base_delay_ms, int(retry_max_delay_ms))
         if transport is not None and not isinstance(transport, httpx.BaseTransport):
             transport = httpx.MockTransport(transport)  # type: ignore[arg-type]
         self._client = client or httpx.Client(
@@ -232,6 +244,7 @@ class OpenAICompatibleClient:
         temperature: float = 0.0,
         max_output_tokens: Optional[int] = None,
         timeout_seconds: Optional[int] = None,
+        section_key: str = "",
     ) -> str:
         payload = {
             "model": model or self.model,
@@ -251,18 +264,116 @@ class OpenAICompatibleClient:
             request_timeout = None
         else:
             request_timeout = httpx.Timeout(timeout_seconds)
-        response = self._client.post(
-            f"{self.api_base}/chat/completions",
-            json=payload,
-            headers=headers,
-            timeout=request_timeout,
-        )
-        response.raise_for_status()
-        try:
-            body = response.json()
-        except ValueError as exc:
-            raise RuntimeError("LLM 返回不是合法 JSON") from exc
-        return _extract_text_from_response(body)
+        total_attempts = self.retry_max_attempts + 1
+        last_error: Optional[Exception] = None
+        for attempt in range(total_attempts):
+            started_at = time.monotonic()
+            try:
+                response = self._client.post(
+                    f"{self.api_base}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=request_timeout,
+                )
+                response.raise_for_status()
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    raise RuntimeError("LLM 返回不是合法 JSON") from exc
+                return _extract_text_from_response(body)
+            except Exception as exc:
+                last_error = exc
+                status_code = _extract_status_code(exc)
+                transient = _is_transient_llm_error(exc)
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+                wait_ms = 0
+                should_retry = transient and attempt < self.retry_max_attempts
+
+                if should_retry:
+                    retry_after_ms = _extract_retry_after_ms(exc)
+                    if retry_after_ms is not None:
+                        wait_ms = min(retry_after_ms, self.retry_max_delay_ms)
+                    else:
+                        cap_ms = min(self.retry_max_delay_ms, self.retry_base_delay_ms * (2 ** attempt))
+                        wait_ms = int(random.uniform(0, max(1, cap_ms)))
+                    logger.warning(
+                        "llm_retry %s",
+                        json.dumps(
+                            {
+                                "error_type": exc.__class__.__name__,
+                                "status_code": status_code,
+                                "attempt": attempt + 1,
+                                "wait_ms": wait_ms,
+                                "duration_ms": duration_ms,
+                                "section_key": section_key,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                    time.sleep(wait_ms / 1000.0)
+                    continue
+
+                logger.error(
+                    "llm_failed %s",
+                    json.dumps(
+                        {
+                            "error_type": exc.__class__.__name__,
+                            "status_code": status_code,
+                            "attempt": attempt + 1,
+                            "wait_ms": wait_ms,
+                            "duration_ms": duration_ms,
+                            "section_key": section_key,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                raise
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("LLM 请求失败")
+
+
+_RETRYABLE_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
+_NON_RETRYABLE_HTTP_STATUS = {400, 401, 403, 404, 422}
+
+
+def _extract_status_code(exc: Exception) -> int:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return int(exc.response.status_code)
+    return 0
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError, httpx.ConnectError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = int(exc.response.status_code)
+        if status in _NON_RETRYABLE_HTTP_STATUS:
+            return False
+        return status in _RETRYABLE_HTTP_STATUS
+    return False
+
+
+def _extract_retry_after_ms(exc: Exception) -> Optional[int]:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    value = str(exc.response.headers.get("Retry-After") or "").strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return max(0, int(value) * 1000)
+    try:
+        dt = parsedate_to_datetime(value)
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return max(0, int((dt - now).total_seconds() * 1000))
+    except Exception:
+        return None
 
 
 def _default_api_base(config: InferenceConfig) -> Optional[str]:
@@ -297,7 +408,6 @@ class LLMOrchestrator:
         planning_temperature: float = 0.2,
         extraction_temperature: float = 0.0,
         max_output_tokens: int = 1200,
-        retry_attempts: int = 2,
     ) -> None:
         self.client = client
         self.enabled = enabled
@@ -306,7 +416,6 @@ class LLMOrchestrator:
         self.planning_temperature = planning_temperature
         self.extraction_temperature = extraction_temperature
         self.max_output_tokens = max_output_tokens
-        self.retry_attempts = retry_attempts
 
     @classmethod
     def from_config(
@@ -329,6 +438,9 @@ class LLMOrchestrator:
                 timeout_seconds=config.llm_timeout_seconds,
                 max_output_tokens=config.llm_max_output_tokens,
                 user_agent=config.llm_user_agent,
+                retry_max_attempts=config.llm_retry_max_attempts,
+                retry_base_delay_ms=config.llm_retry_base_delay_ms,
+                retry_max_delay_ms=config.llm_retry_max_delay_ms,
                 transport=transport,
             )
 
@@ -340,7 +452,6 @@ class LLMOrchestrator:
             planning_temperature=config.llm_planning_temperature,
             extraction_temperature=config.llm_extraction_temperature,
             max_output_tokens=config.llm_max_output_tokens,
-            retry_attempts=config.llm_retry_attempts,
         )
 
     def is_available(self) -> bool:
@@ -788,28 +899,18 @@ class LLMOrchestrator:
     ) -> Dict[str, Any]:
         if not self.is_available():
             return {}
-
-        last_error: Optional[Exception] = None
-        for attempt in range(self.retry_attempts + 1):
-            try:
-                content = self.client.complete(  # type: ignore[union-attr]
-                    messages,
-                    model=model,
-                    temperature=temperature,
-                    max_output_tokens=self.max_output_tokens,
-                )
-                if not content:
-                    return {}
-                return _extract_json_payload(content)
-            except Exception as exc:  # pragma: no cover - 防御兜底
-                last_error = exc
-                if attempt < self.retry_attempts:
-                    time.sleep(min(0.5 * (attempt + 1), 1.5))
-                    continue
+        try:
+            content = self.client.complete(  # type: ignore[union-attr]
+                messages,
+                model=model,
+                temperature=temperature,
+                max_output_tokens=self.max_output_tokens,
+            )
+            if not content:
                 return {}
-        if last_error is not None:
+            return _extract_json_payload(content)
+        except Exception:  # pragma: no cover - 防御兜底
             return {}
-        return {}
 
     @staticmethod
     def _normalize_path(value: Any) -> List[str]:
