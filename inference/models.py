@@ -99,8 +99,16 @@ def _default_llm_api_base():
 
 def _default_llm_enabled():
     api_base = _default_llm_api_base()
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY") or "sk-539bfb607ee749ceb4174358c5fb1ea9"
     return bool(api_base and api_key)
+
+
+def _default_llm_api_key_env():
+    if os.getenv("OPENAI_API_KEY"):
+        return "OPENAI_API_KEY"
+    if os.getenv("LLM_API_KEY"):
+        return "LLM_API_KEY"
+    return "sk-539bfb607ee749ceb4174358c5fb1ea9"
 
 
 def _default_llm_model():
@@ -245,7 +253,7 @@ class InferenceConfig(BaseModel):
     cny_per_usd: float = Field(default=7.2, gt=0)
     llm_enabled: bool = Field(default_factory=_default_llm_enabled)
     llm_api_base: Optional[str] = Field(default_factory=_default_llm_api_base)
-    llm_api_key_env: str = Field(default="OPENAI_API_KEY")
+    llm_api_key_env: str = Field(default_factory=_default_llm_api_key_env)
     llm_model: str = Field(default_factory=_default_llm_model)
     llm_planning_model: Optional[str] = None
     llm_extraction_model: Optional[str] = None
