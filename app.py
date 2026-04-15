@@ -131,19 +131,95 @@ def rewrite_summary_market_research_phrase(tree: ET.Element, product_name: str) 
                 ot.text = ""
 
 
+def _write_run_text_with_breaks(run: ET.Element, text_value: str) -> None:
+    text = str(text_value or "")
+    for child in list(run):
+        if child.tag in {f"{{{NS['w']}}}t", f"{{{NS['w']}}}br"}:
+            run.remove(child)
+    lines = text.split("\n")
+    if not lines:
+        lines = [""]
+    for idx, line in enumerate(lines):
+        t = ET.SubElement(run, f"{{{NS['w']}}}t")
+        if line[:1].isspace() or line[-1:].isspace():
+            t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        t.text = line
+        if idx < len(lines) - 1:
+            ET.SubElement(run, f"{{{NS['w']}}}br")
+
+
 def set_paragraph_text(p: ET.Element, value: str) -> None:
     runs = p.findall('./w:r', namespaces=NS)
     if not runs:
         return
     first = runs[0]
     ts = first.findall('./w:t', namespaces=NS)
-    t = ts[0] if ts else ET.SubElement(first, f"{{{NS['w']}}}t")
     for ex in ts[1:]:
         first.remove(ex)
-    t.text = value
+    if not ts:
+        ET.SubElement(first, f"{{{NS['w']}}}t")
+    _write_run_text_with_breaks(first, str(value))
     for other in runs[1:]:
         for ot in other.findall('./w:t', namespaces=NS):
             ot.text = ""
+        for br in other.findall('./w:br', namespaces=NS):
+            other.remove(br)
+
+
+def _normalize_source_values(raw: object) -> List[str]:
+    values = raw if isinstance(raw, (list, tuple)) else [raw]
+    normalized: List[str] = []
+    for item in values:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if text in normalized:
+            continue
+        normalized.append(text)
+    return normalized
+
+
+def _extract_source_names(source: dict) -> List[str]:
+    names = _normalize_source_values(source.get("names"))
+    if names:
+        return names
+    return _normalize_source_values(source.get("name"))
+
+
+def _extract_source_urls(source: dict) -> List[str]:
+    urls = _normalize_source_values(source.get("urls"))
+    if urls:
+        return urls
+    return _normalize_source_values(source.get("url"))
+
+
+def _format_numbered_lines(items: List[str], *, always_number: bool = False) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return f"1. {items[0]}" if always_number else items[0]
+    lines = [f"{idx}. {item}" for idx, item in enumerate(items, start=1)]
+    return "\n".join(lines) + "\n"
+
+
+def _format_labeled_source_text(label: str, items: List[str]) -> str:
+    if not items:
+        return f"{label}："
+    if len(items) == 1:
+        return f"{label}：{items[0]}"
+    numbered = _format_numbered_lines(items, always_number=True)
+    return f"{label}：\n{numbered}"
+
+
+def _set_paragraph_alignment(paragraph: ET.Element, align: str) -> None:
+    ppr = paragraph.find("./w:pPr", namespaces=NS)
+    if ppr is None:
+        ppr = ET.Element(f"{{{NS['w']}}}pPr")
+        paragraph.insert(0, ppr)
+    jc = ppr.find("./w:jc", namespaces=NS)
+    if jc is None:
+        jc = ET.SubElement(ppr, f"{{{NS['w']}}}jc")
+    jc.set(f"{{{NS['w']}}}val", align)
 
 
 def apply_body_plain_paragraph_justification(root: ET.Element) -> None:
@@ -254,6 +330,8 @@ def _format_rank_text(raw_rank: str) -> str:
 class SourceBlock(BaseModel):
     name: str
     url: str
+    names: List[str] = Field(default_factory=list)
+    urls: List[str] = Field(default_factory=list)
     chart_title: str
     analysis: str
     chart_2023: str = ""
@@ -271,6 +349,7 @@ class OtherProofLayer(BaseModel):
     name: str
     analysis: str = ""
     url: str = ""
+    urls: List[str] = Field(default_factory=list)
 
 
 class Chapter1Section(BaseModel):
@@ -355,7 +434,19 @@ def generate_docx_v4(data: dict, template_path, output_path):
         commit(curr_field_runs)
 
     # 3. Structural duplication or deletion
-    srcs = data.get("sources", [])
+    raw_source_blocks = data.get("sources", [])
+    srcs = []
+    for source in raw_source_blocks if isinstance(raw_source_blocks, list) else []:
+        if not isinstance(source, dict):
+            continue
+        normalized_names = _extract_source_names(source)
+        normalized_urls = _extract_source_urls(source)
+        merged = dict(source)
+        merged["_names"] = normalized_names
+        merged["_urls"] = normalized_urls
+        merged["name"] = normalized_names[0] if normalized_names else str(source.get("name") or "").strip()
+        merged["url"] = normalized_urls[0] if normalized_urls else str(source.get("url") or "").strip()
+        srcs.append(merged)
     comp_data = data.get("competitors", [])
     company_name = str(data.get("company_name", "")).strip()
     named_competitors = [
@@ -414,9 +505,13 @@ def generate_docx_v4(data: dict, template_path, output_path):
     ])
     
     # Field 16, 17 (Source meta 1 and 2, which don't dynamically scale in the intro text unfortunately)
-    s0_name = srcs[0]["name"] if num_sources > 0 else ""
-    s1_name = srcs[1]["name"] if num_sources > 1 else ""
-    vals.extend([s0_name, s1_name])
+    intro_source_names: List[str] = []
+    for source in srcs:
+        intro_source_names.extend(source.get("_names", []))
+    vals.extend([
+        _format_numbered_lines(intro_source_names, always_number=True),
+        "",
+    ])
     
     # Field 18-21
     vals.extend([
@@ -428,12 +523,14 @@ def generate_docx_v4(data: dict, template_path, output_path):
     
     # Dynamic Source Blocks
     for s in srcs:
+        source_names = s.get("_names", [])
+        source_urls = s.get("_urls", [])
         vals.extend([
             s["analysis"],
             s["chart_title"],
             "", # empty placeholder for chart image
-            f"数据来源：{s['name']}",
-            f"来源网址：{s['url']}"
+            _format_labeled_source_text("数据来源", source_names),
+            _format_labeled_source_text("来源网址", source_urls),
         ])
         
     # Subsequent Fields
@@ -553,15 +650,17 @@ def generate_docx_v4(data: dict, template_path, output_path):
             cur += 1
             f = fr[0]
             ts = f.findall('./w:t', namespaces=NS)
-            t = ts[0] if ts else ET.SubElement(f, f"{{{NS['w']}}}t")
+            if not ts:
+                ET.SubElement(f, f"{{{NS['w']}}}t")
             for ex in ts[1:]: f.remove(ex)
-            t.text = str(txt)
+            _write_run_text_with_breaks(f, str(txt))
             pr = f.find('./w:rPr', namespaces=NS)
             if pr is not None:
                 h = pr.find('./w:highlight', namespaces=NS)
                 if h is not None: pr.remove(h)
             for other in fr[1:]:
                 for ot in other.findall('./w:t', namespaces=NS): ot.text = ""
+                for br in other.findall('./w:br', namespaces=NS): other.remove(br)
                 oPr = other.find('./w:rPr', namespaces=NS)
                 if oPr is not None:
                    ohl = oPr.find('./w:highlight', namespaces=NS)
@@ -585,6 +684,7 @@ def generate_docx_v4(data: dict, template_path, output_path):
     _rewrite_self_dynamic_chart_references(tree, source_count=num_sources)
     _rewrite_self_opening_requirement_sentence(tree)
     _center_self_summary_table_cells(tree)
+    _left_align_self_summary_source_cells(tree)
     _bold_self_company_row_in_sales_table(tree, company_name=str(data.get("company_name", "")).strip())
     apply_body_plain_paragraph_justification(tree)
     try:
@@ -685,6 +785,30 @@ def _center_self_summary_table_cells(tree: ET.Element) -> None:
             if jc is None:
                 jc = ET.SubElement(ppr, f"{{{NS['w']}}}jc")
             jc.set(f"{{{NS['w']}}}val", "center")
+
+
+def _left_align_self_summary_source_cells(tree: ET.Element) -> None:
+    body = tree.find(f".//{{{NS['w']}}}body")
+    if body is None:
+        return
+    target_table = None
+    for child in list(body):
+        if child.tag != f"{{{NS['w']}}}tbl":
+            continue
+        table_text = "".join(t.text or "" for t in child.findall(".//w:t", namespaces=NS))
+        normalized_text = re.sub(r"\s+", "", table_text)
+        if "企业名称" in normalized_text and "主导产品名称" in normalized_text and "2023年相关数据" in normalized_text:
+            target_table = child
+            break
+    if target_table is None:
+        return
+
+    for row in target_table.findall("./w:tr", namespaces=NS):
+        row_text = "".join(t.text or "" for t in row.findall(".//w:t", namespaces=NS))
+        if "数据来源" not in row_text:
+            continue
+        for paragraph in row.findall(".//w:p", namespaces=NS):
+            _set_paragraph_alignment(paragraph, "left")
 
 
 def _set_row_bold(row: ET.Element) -> None:

@@ -427,7 +427,11 @@ def _bind_other_layers_to_sources(
 
         source = normalized_sources[index - 1]
         analysis = str(source.get("analysis") or "").strip()
-        url = str(source.get("url") or "").strip()
+        source_urls = _normalize_source_values(source.get("urls"))
+        fallback_url = str(source.get("url") or "").strip()
+        if fallback_url and fallback_url not in source_urls:
+            source_urls.insert(0, fallback_url)
+        url = source_urls[0] if source_urls else ""
         if not analysis:
             raise OtherProofError(f"自证第 {index} 层来源正文不能为空")
         if not url:
@@ -438,12 +442,26 @@ def _bind_other_layers_to_sources(
                 "name": layer_name,
                 "analysis": analysis,
                 "url": url,
+                "urls": source_urls,
                 "chart_2023": str(source.get("chart_2023") or "").strip(),
                 "chart_2024": str(source.get("chart_2024") or "").strip(),
                 "chart_2025": str(source.get("chart_2025") or "").strip(),
             }
         )
     return bound_layers
+
+
+def _normalize_source_values(raw: Any) -> List[str]:
+    values = raw if isinstance(raw, (list, tuple)) else [raw]
+    normalized: List[str] = []
+    for item in values:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if text in normalized:
+            continue
+        normalized.append(text)
+    return normalized
 
 
 def _build_company_rows(
@@ -1206,8 +1224,9 @@ def _replace_highlight_fields(root: ET.Element, values: Sequence[str]) -> List[E
             field_paragraphs.append(paragraph)
             first = field_runs[0]
             texts = first.findall("./w:t", NS)
-            text_node = texts[0] if texts else ET.SubElement(first, f"{{{NS['w']}}}t")
-            text_node.text = text_value
+            if not texts:
+                ET.SubElement(first, f"{{{NS['w']}}}t")
+            _write_run_text_with_breaks(first, text_value)
             for extra in texts[1:]:
                 first.remove(extra)
             first_props = first.find("./w:rPr", NS)
@@ -1218,6 +1237,8 @@ def _replace_highlight_fields(root: ET.Element, values: Sequence[str]) -> List[E
             for other in field_runs[1:]:
                 for node in other.findall("./w:t", NS):
                     node.text = ""
+                for br in other.findall("./w:br", NS):
+                    other.remove(br)
                 other_props = other.find("./w:rPr", NS)
                 if other_props is not None:
                     highlight = other_props.find("./w:highlight", NS)
@@ -1251,6 +1272,23 @@ def _is_yellow_run(run: ET.Element) -> bool:
 
 
 
+def _write_run_text_with_breaks(run: ET.Element, text_value: str) -> None:
+    text = str(text_value or "")
+    for child in list(run):
+        if child.tag in {f"{{{NS['w']}}}t", f"{{{NS['w']}}}br"}:
+            run.remove(child)
+    lines = text.split("\n")
+    if not lines:
+        lines = [""]
+    for idx, line in enumerate(lines):
+        text_node = ET.SubElement(run, f"{{{NS['w']}}}t")
+        if line[:1].isspace() or line[-1:].isspace():
+            text_node.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        text_node.text = line
+        if idx < len(lines) - 1:
+            ET.SubElement(run, f"{{{NS['w']}}}br")
+
+
 def _set_paragraph_text(paragraph: ET.Element, text: str) -> None:
     # 清空段落内所有正文节点（含 hyperlink），避免新旧链接文本串联。
     ppr = paragraph.find("./w:pPr", NS)
@@ -1269,8 +1307,7 @@ def _set_paragraph_text(paragraph: ET.Element, text: str) -> None:
     run = ET.SubElement(paragraph, f"{{{NS['w']}}}r")
     if preserved_rpr is not None:
         run.append(preserved_rpr)
-    text_node = ET.SubElement(run, f"{{{NS['w']}}}t")
-    text_node.text = text
+    _write_run_text_with_breaks(run, text)
 
 
 

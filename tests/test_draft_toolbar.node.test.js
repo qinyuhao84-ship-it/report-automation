@@ -56,10 +56,13 @@ test('图表标题前缀自动生成，用户只填写后半句', () => {
   assert.match(html, /class="s-c23"/);
   assert.match(html, /class="s-c24"/);
   assert.match(html, /class="s-c25"/);
+  assert.match(html, /function addSourceMultiInput\(button, type, value = ""\) \{/);
+  assert.match(html, /function collectSourceMultiValues\(card, type\) \{/);
   assert.match(html, /function extractChartTitleSuffix\(rawTitle\) \{/);
   assert.match(html, /function validateSourceChartData\(sources, contextLabel = "数据来源"\) \{/);
   assert.match(html, /chart_title: `图表\$\{idx \+ 1\}：\$\{suffix\}`/);
-  assert.match(html, /if \(block\.name \|\| block\.url \|\| suffix \|\| block\.analysis \|\| block\.chart_2023 \|\| block\.chart_2024 \|\| block\.chart_2025\) list\.push\(block\);/);
+  assert.match(html, /names,\s*url: urls\[0\] \|\| "",\s*urls,/);
+  assert.match(html, /if \(block\.names\.length \|\| block\.urls\.length \|\| suffix \|\| block\.analysis \|\| block\.chart_2023 \|\| block\.chart_2024 \|\| block\.chart_2025\) list\.push\(block\);/);
 });
 
 test('经营数据市场规模支持手填且来源优先', () => {

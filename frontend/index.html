@@ -414,6 +414,63 @@
       cursor: pointer;
     }
 
+    .source-field-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 5px;
+    }
+
+    .source-field-head label {
+      margin-bottom: 0;
+    }
+
+    .source-mini-add {
+      width: 24px;
+      height: 24px;
+      border: 1px solid #c7d8d1;
+      border-radius: 8px;
+      background: #edf6f2;
+      color: #2b5b4d;
+      font-weight: 700;
+      cursor: pointer;
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+
+    .source-mini-add:hover {
+      background: #e2f2eb;
+    }
+
+    .source-multi-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .source-multi-item {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .source-multi-item input {
+      flex: 1 1 auto;
+    }
+
+    .source-mini-del {
+      width: 24px;
+      height: 24px;
+      border: 1px solid #f1d4c8;
+      border-radius: 8px;
+      background: #fff3ee;
+      color: #b64a2d;
+      cursor: pointer;
+      flex: 0 0 auto;
+      line-height: 1;
+      font-size: 16px;
+    }
+
     .chart-title-editor {
       display: flex;
       align-items: center;
@@ -1087,6 +1144,29 @@
       return { companyName, versionNo: target.versionNo };
     }
 
+    function sanitizeFileNamePart(text) {
+      return String(text || "")
+        .trim()
+        .replace(/[\\/:*?"<>|]/g, "_")
+        .replace(/\s+/g, " ");
+    }
+
+    function buildOutputFileName(data) {
+      const monthNum = Number(String(data.month || "").trim());
+      const dayNum = Number(String(data.day || "").trim());
+      const now = new Date();
+      const mm = Number.isInteger(monthNum) && monthNum >= 1 && monthNum <= 12
+        ? String(monthNum).padStart(2, "0")
+        : String(now.getMonth() + 1).padStart(2, "0");
+      const dd = Number.isInteger(dayNum) && dayNum >= 1 && dayNum <= 31
+        ? String(dayNum).padStart(2, "0")
+        : String(now.getDate()).padStart(2, "0");
+      const target = getSelectedVersionTarget();
+      const versionNo = target && Number.isInteger(target.versionNo) && target.versionNo >= 1 ? target.versionNo : 1;
+      const company = sanitizeFileNamePart(data.company_name || "企业名称");
+      return `${mm}${dd}-${company}-${versionNo}版.docx`;
+    }
+
     async function refreshDraftPickers(preferredCompany = "", preferredEntry = "") {
       const companySelect = document.getElementById("draftCompanySelect");
       const versionSelect = document.getElementById("draftVersionSelect");
@@ -1623,14 +1703,75 @@
       return text.replace(/^图表\s*\d+\s*[:：]?\s*/, "").trim();
     }
 
+    function normalizeSourceValues(raw) {
+      const values = Array.isArray(raw) ? raw : [raw];
+      const normalized = [];
+      values.forEach((item) => {
+        const text = String(item || "").trim();
+        if (!text) return;
+        if (!normalized.includes(text)) normalized.push(text);
+      });
+      return normalized;
+    }
+
+    function addSourceMultiInput(button, type, value = "") {
+      const card = button.closest(".source-card");
+      if (!card) return;
+      const list = card.querySelector(type === "name" ? ".source-name-list" : ".source-url-list");
+      if (!list) return;
+      const item = document.createElement("div");
+      item.className = "source-multi-item";
+      const inputClass = type === "name" ? "s-name" : "s-url";
+      item.innerHTML = `
+        <input class="${inputClass}" value="${String(value || "").replace(/"/g, "&quot;")}" />
+        <button class="source-mini-del" type="button" onclick="removeSourceMultiInput(this)">×</button>
+      `;
+      list.appendChild(item);
+    }
+
+    function removeSourceMultiInput(button) {
+      const row = button.closest(".source-multi-item");
+      const list = row?.parentElement;
+      if (!row || !list) return;
+      row.remove();
+      if (!list.querySelector(".source-multi-item")) {
+        const card = list.closest(".source-card");
+        if (!card) return;
+        const addButton = card.querySelector(list.classList.contains("source-name-list") ? ".add-source-name" : ".add-source-url");
+        if (addButton) addSourceMultiInput(addButton, list.classList.contains("source-name-list") ? "name" : "url", "");
+      }
+    }
+
+    function collectSourceMultiValues(card, type) {
+      const selector = type === "name" ? ".s-name" : ".s-url";
+      const values = [];
+      card.querySelectorAll(selector).forEach((input) => {
+        const text = String(input.value || "").trim();
+        if (text) values.push(text);
+      });
+      return values;
+    }
+
     function addSource(prefill) {
       const card = document.createElement("div");
       card.className = "source-card";
       card.innerHTML = `
         <button class="source-del" type="button" onclick="removeSourceCard(this)">×</button>
         <div class="source-layer-label" style="font-size:12px;color:#4e6f64;margin-bottom:6px;">第 1 层来源</div>
-        <div class="field"><label>来源名称</label><input class="s-name" /></div>
-        <div class="field"><label>来源网址</label><input class="s-url" /></div>
+        <div class="field">
+          <div class="source-field-head">
+            <label>来源名称</label>
+            <button class="source-mini-add add-source-name" type="button" onclick="addSourceMultiInput(this, 'name')">+</button>
+          </div>
+          <div class="source-multi-list source-name-list"></div>
+        </div>
+        <div class="field">
+          <div class="source-field-head">
+            <label>来源网址</label>
+            <button class="source-mini-add add-source-url" type="button" onclick="addSourceMultiInput(this, 'url')">+</button>
+          </div>
+          <div class="source-multi-list source-url-list"></div>
+        </div>
         <div class="field">
           <label>图表标题</label>
           <div class="chart-title-editor">
@@ -1650,9 +1791,16 @@
       document.getElementById("sources_list").appendChild(card);
       refreshSourceLabels();
 
+      const prefillNames = normalizeSourceValues((prefill && prefill.names) || (prefill ? prefill.name : ""));
+      const prefillUrls = normalizeSourceValues((prefill && prefill.urls) || (prefill ? prefill.url : ""));
+      const nameValues = prefillNames.length ? prefillNames : [""];
+      const urlValues = prefillUrls.length ? prefillUrls : [""];
+      const nameBtn = card.querySelector(".add-source-name");
+      const urlBtn = card.querySelector(".add-source-url");
+      nameValues.forEach((value) => addSourceMultiInput(nameBtn, "name", value));
+      urlValues.forEach((value) => addSourceMultiInput(urlBtn, "url", value));
+
       if (prefill) {
-        card.querySelector(".s-name").value = prefill.name || "";
-        card.querySelector(".s-url").value = prefill.url || "";
         card.querySelector(".s-chart-suffix").value = extractChartTitleSuffix(prefill.chart_title || prefill.chart_title_suffix || "");
         card.querySelector(".s-c23").value = prefill.chart_2023 || "";
         card.querySelector(".s-c24").value = prefill.chart_2024 || "";
@@ -1706,22 +1854,28 @@
       const list = [];
       document.querySelectorAll("#sources_list .source-card").forEach((card, idx) => {
         const suffix = card.querySelector(".s-chart-suffix").value.trim();
+        const names = collectSourceMultiValues(card, "name");
+        const urls = collectSourceMultiValues(card, "url");
         const block = {
-          name: card.querySelector(".s-name").value,
-          url: card.querySelector(".s-url").value,
+          name: names[0] || "",
+          names,
+          url: urls[0] || "",
+          urls,
           chart_title: `图表${idx + 1}：${suffix}`,
           chart_2023: card.querySelector(".s-c23").value.trim(),
           chart_2024: card.querySelector(".s-c24").value.trim(),
           chart_2025: card.querySelector(".s-c25").value.trim(),
           analysis: card.querySelector(".s-quote").value,
         };
-        if (block.name || block.url || suffix || block.analysis || block.chart_2023 || block.chart_2024 || block.chart_2025) list.push(block);
+        if (block.names.length || block.urls.length || suffix || block.analysis || block.chart_2023 || block.chart_2024 || block.chart_2025) list.push(block);
       });
 
       if (ensureDefault && list.length === 0) {
         list.push({
           name: "系统默认来源",
+          names: ["系统默认来源"],
           url: "",
+          urls: [],
           chart_title: "图表1：市场规模",
           chart_2023: "",
           chart_2024: "",
@@ -1828,7 +1982,10 @@
         const layer = layers[i];
         const source = sources[i] || {};
         const analysis = String(source.analysis || "").trim();
-        const url = String(source.url || "").trim();
+        const urls = normalizeSourceValues(source.urls);
+        const fallbackUrl = String(source.url || "").trim();
+        if (fallbackUrl && !urls.includes(fallbackUrl)) urls.unshift(fallbackUrl);
+        const url = urls[0] || "";
         if (!analysis) {
           return { ok: false, message: `第 ${i + 1} 层来源正文不能为空，他证第二章会直接复用它` };
         }
@@ -1839,6 +1996,7 @@
           name: layer.name,
           analysis,
           url,
+          urls,
           chart_2023: String(source.chart_2023 || "").trim(),
           chart_2024: String(source.chart_2024 || "").trim(),
           chart_2025: String(source.chart_2025 || "").trim(),
@@ -2128,6 +2286,8 @@
         sources,
         competitors: collectCompetitors(),
       };
+      const activeVersionTarget = getSelectedVersionTarget();
+      data.version_no = activeVersionTarget && Number.isInteger(activeVersionTarget.versionNo) ? activeVersionTarget.versionNo : 1;
 
       if (templateType === "other") {
         const proofScope = document.getElementById("proof_scope").value.trim();
@@ -2201,7 +2361,7 @@
         const blob = await r.blob();
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = "output.docx";
+        a.download = buildOutputFileName(data);
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
