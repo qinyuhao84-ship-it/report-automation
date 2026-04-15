@@ -92,11 +92,13 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
 
     product = product_name.strip()
     chapter1_timeout_seconds = max(20, int(config.llm_timeout_seconds))
-    chapter1_max_output_tokens = max(1200, min(int(config.llm_max_output_tokens), 2400))
     chapter1_model = _resolve_chapter1_model_name(
         config.llm_model,
         getattr(orchestrator.client, "model", "") or config.llm_model,
     )
+    chapter1_max_output_tokens = max(1200, min(int(config.llm_max_output_tokens), 2400))
+    if _is_reasoner_model(chapter1_model):
+        chapter1_max_output_tokens = 2400
     raw_sections: List[Dict[str, Any]] = []
     warnings: List[str] = []
     successful_sections = 0
@@ -225,9 +227,14 @@ def _generate_chapter1_section(
 def _resolve_chapter1_model_name(config_model: str, fallback_model: str) -> str:
     model = str(config_model or fallback_model or "").strip()
     lower = model.lower()
-    if lower == "deepseek-reasoner":
-        return "deepseek-chat"
+    if lower == "deepseek-r1":
+        return "deepseek-reasoner"
     return model or fallback_model
+
+
+def _is_reasoner_model(model_name: str) -> bool:
+    model = str(model_name or "").strip().lower()
+    return model in {"deepseek-reasoner", "deepseek-r1"}
 
 
 
@@ -1616,13 +1623,17 @@ def _extract_json_payload(raw_text: str) -> Dict[str, Any]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"(\{.*\})", text, re.S)
-        if not match:
-            raise OtherProofError("第一章生成结果不是合法 JSON")
-        try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError as exc:
-            raise OtherProofError("第一章生成结果不是合法 JSON") from exc
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char not in "{[":
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and parsed:
+                return parsed
+        raise OtherProofError("第一章生成结果不是合法 JSON")
 
 
 def _coerce_chapter1_sections_from_text(raw_text: str) -> tuple[List[Dict[str, Any]], str]:
@@ -1882,6 +1893,12 @@ def _coerce_chapter1_section_paragraphs_from_text(raw_text: str) -> tuple[List[s
     text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return [], "返回为空，已改写为占位"
+    json_like_sections = _extract_sections_from_json_like_text(text)
+    if json_like_sections:
+        section = json_like_sections[0] if isinstance(json_like_sections[0], dict) else {}
+        paragraphs = [str(item).strip() for item in (section.get("paragraphs") or []) if str(item).strip()]
+        if paragraphs:
+            return paragraphs, "返回了不完整 JSON，已自动修复"
     blocks = [item.strip() for item in re.split(r"\n{2,}", text) if item.strip()]
     paragraphs = [item for item in blocks if len(re.sub(r"\s+", "", item)) >= 12]
     if not paragraphs:

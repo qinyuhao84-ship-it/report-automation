@@ -136,6 +136,12 @@ def test_llm_config_reads_env(monkeypatch):
     assert config.llm_model == "gpt-5.1-codex"
 
 
+def test_resolve_model_maps_deepseek_r1_alias():
+    assert llm_module._resolve_model("deepseek-r1", "fallback-model") == "deepseek-reasoner"
+    assert llm_module._resolve_model("DeepSeek-R1", "fallback-model") == "deepseek-reasoner"
+    assert llm_module._resolve_model("deepseek-chat", "fallback-model") == "deepseek-chat"
+
+
 def test_llm_orchestrator_plan_and_extract(sample_input):
     transport = MockTransport()
     client = OpenAICompatibleClient(
@@ -230,6 +236,43 @@ def test_openai_client_retries_on_429_then_succeeds(monkeypatch):
     content = client.complete([{"role": "user", "content": "hi"}], section_key="background_overview")
     assert calls["count"] == 2
     assert sleep_values == [1.0]
+    assert '"ok": true' in content
+
+
+def test_openai_client_retries_on_empty_content(monkeypatch):
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": ""}}]},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"ok": true}'}}]},
+            request=request,
+        )
+
+    sleep_values = []
+    monkeypatch.setattr(llm_module.time, "sleep", lambda seconds: sleep_values.append(seconds))
+    monkeypatch.setattr(llm_module.random, "uniform", lambda _a, _b: 0)
+
+    client = OpenAICompatibleClient(
+        api_base="https://proxy.example.com/v1",
+        api_key="sk-test",
+        model="gpt-5.1-codex",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        retry_max_attempts=3,
+        retry_base_delay_ms=800,
+        retry_max_delay_ms=8000,
+    )
+
+    content = client.complete([{"role": "user", "content": "hi"}], section_key="background_overview")
+    assert calls["count"] == 2
+    assert sleep_values == [0.0]
     assert '"ok": true' in content
 
 

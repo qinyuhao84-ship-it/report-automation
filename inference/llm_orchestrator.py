@@ -19,6 +19,10 @@ from .providers import ProviderHit
 logger = logging.getLogger(__name__)
 
 
+class _EmptyLLMContentError(RuntimeError):
+    """Raised when LLM request succeeds but returns empty text content."""
+
+
 def _normalize_text(value: Any) -> str:
     if value is None:
         return ""
@@ -280,7 +284,10 @@ class OpenAICompatibleClient:
                     body = response.json()
                 except ValueError as exc:
                     raise RuntimeError("LLM 返回不是合法 JSON") from exc
-                return _extract_text_from_response(body)
+                content = _extract_text_from_response(body)
+                if content:
+                    return content
+                raise _EmptyLLMContentError("LLM 返回为空")
             except Exception as exc:
                 last_error = exc
                 status_code = _extract_status_code(exc)
@@ -344,6 +351,8 @@ def _extract_status_code(exc: Exception) -> int:
 
 
 def _is_transient_llm_error(exc: Exception) -> bool:
+    if isinstance(exc, _EmptyLLMContentError):
+        return True
     if isinstance(exc, httpx.TimeoutException):
         return True
     if isinstance(exc, (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError, httpx.ConnectError)):
@@ -394,7 +403,12 @@ def _resolve_api_key(api_key_env: str) -> Optional[str]:
 
 def _resolve_model(value: Optional[str], fallback: str) -> str:
     text = _normalize_text(value)
-    return text or fallback
+    resolved = text or fallback
+    lowered = resolved.lower()
+    if lowered == "deepseek-r1":
+        # DeepSeek OpenAI-compatible endpoint uses deepseek-reasoner for R1 capability.
+        return "deepseek-reasoner"
+    return resolved
 
 
 class LLMOrchestrator:

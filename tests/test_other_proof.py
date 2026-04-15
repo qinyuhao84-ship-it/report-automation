@@ -15,6 +15,8 @@ from other_proof import (
     _rewrite_summary_market_research_phrase,
     _rewrite_dynamic_chart_references,
     _rewrite_other_header_titles,
+    _extract_json_payload,
+    _resolve_chapter1_model_name,
     _set_paragraph_text,
     _validate_manual_company_profiles,
     _ensure_supply_chain_subsections,
@@ -49,6 +51,23 @@ def test_chapter1_section_prompt_has_consulting_style_constraints():
     assert "尽量避免使用冒号" in prompt
     assert "围绕该产品本身" in prompt
     assert '"section"' in prompt
+
+
+def test_resolve_chapter1_model_name_maps_deepseek_r1_to_reasoner():
+    assert _resolve_chapter1_model_name("deepseek-r1", "deepseek-r1") == "deepseek-reasoner"
+    assert _resolve_chapter1_model_name("deepseek-reasoner", "deepseek-reasoner") == "deepseek-reasoner"
+    assert _resolve_chapter1_model_name("deepseek-chat", "deepseek-chat") == "deepseek-chat"
+
+
+def test_extract_json_payload_handles_leading_braces_noise():
+    raw = (
+        "模型说明里可能出现占位符 {}，请忽略。\n"
+        '{"section":{"key":"background_overview","title":"背景与概述","paragraphs":["段落一","段落二"]}}'
+        "\n以上为正文。"
+    )
+    parsed = _extract_json_payload(raw)
+    assert parsed["section"]["key"] == "background_overview"
+    assert parsed["section"]["paragraphs"] == ["段落一", "段落二"]
 
 
 def test_generate_other_chapter1_caps_request_budget(monkeypatch):
