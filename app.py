@@ -199,7 +199,7 @@ def _format_numbered_lines(items: List[str], *, always_number: bool = False) -> 
     if len(items) == 1:
         return f"1. {items[0]}" if always_number else items[0]
     lines = [f"{idx}. {item}" for idx, item in enumerate(items, start=1)]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
 
 
 def _format_labeled_source_text(label: str, items: List[str]) -> str:
@@ -807,8 +807,13 @@ def _left_align_self_summary_source_cells(tree: ET.Element) -> None:
         row_text = "".join(t.text or "" for t in row.findall(".//w:t", namespaces=NS))
         if "数据来源" not in row_text:
             continue
-        for paragraph in row.findall(".//w:p", namespaces=NS):
-            _set_paragraph_alignment(paragraph, "left")
+        cells = row.findall("./w:tc", namespaces=NS)
+        if not cells:
+            continue
+        for idx, cell in enumerate(cells):
+            target_align = "center" if idx == 0 else "left"
+            for paragraph in cell.findall(".//w:p", namespaces=NS):
+                _set_paragraph_alignment(paragraph, target_align)
 
 
 def _set_row_bold(row: ET.Element) -> None:
