@@ -586,6 +586,73 @@ def test_ensure_supply_chain_subsections_splits_combined_markers():
     assert "B" in result[2]
 
 
+def test_reflow_industry_environment_paragraphs_starts_with_section_heading():
+    sections, _warnings = normalize_chapter1_sections(
+        [
+            {
+                "key": "industry_environment",
+                "title": "行业发展环境",
+                "paragraphs": [
+                    "行业发展环境受到政策、经济、技术和社会因素协同影响。",
+                    "政策端持续强化安全与质量约束。",
+                    "经济端投资结构向高端制造倾斜。",
+                    "技术端关键部件持续迭代升级。",
+                    "社会端对高可靠供电安全要求持续提升。",
+                ],
+            }
+        ]
+    )
+    target = next(item for item in sections if item["key"] == "industry_environment")
+    assert target["paragraphs"][0] == "（一）行业发展环境"
+    assert target["paragraphs"][2] == "1. 政策环境"
+    assert target["paragraphs"][5] == "2. 经济环境"
+    assert target["paragraphs"][9] == "3. 技术环境"
+    assert target["paragraphs"][13] == "4. 社会环境"
+
+
+def test_split_paragraph_for_template_does_not_split_on_comma():
+    text = "该段只有逗号，没有句号，所以不应在逗号处拆分，并保持同一段落结构"
+    left, right = other_proof._split_paragraph_for_template(text)
+    assert left == text
+    assert right == ""
+
+
+def test_remove_section_page_number_restart_removes_pg_num_type():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    root = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            <w:p><w:r><w:t>正文</w:t></w:r></w:p>
+            <w:sectPr><w:pgNumType w:start="1"/></w:sectPr>
+          </w:body>
+        </w:document>
+        """
+    )
+    other_proof._remove_section_page_number_restart(root)
+    assert root.find(f".//{{{ns}}}pgNumType") is None
+
+
+def test_set_signature_block_right_alignment_sets_signature_to_right():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    root = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            <w:p><w:r><w:t>北京算路科技有限公司（盖章）</w:t></w:r></w:p>
+            <w:p><w:r><w:t>2026 年 4 月 16 日</w:t></w:r></w:p>
+          </w:body>
+        </w:document>
+        """
+    )
+    other_proof._set_signature_block_right_alignment(root)
+    paragraphs = root.findall(f".//{{{ns}}}p")
+    for paragraph in paragraphs:
+        jc = paragraph.find(f"./{{{ns}}}pPr/{{{ns}}}jc")
+        assert jc is not None
+        assert jc.get(f"{{{ns}}}val") == "right"
+
+
 def test_rewrite_other_header_titles_updates_header_company_and_product():
     ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     header_xml = f"""
