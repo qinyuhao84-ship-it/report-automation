@@ -107,3 +107,11 @@ test('他证支持第一章失败后跳过继续生成', () => {
   assert.match(html, /if \(!skipChapter1OnFailure\) return;/);
   assert.match(html, /第一章：生成失败，已跳过并写入占位内容/);
 });
+
+test('导出文件名：自证按公司名，他证按产品名', () => {
+  assert.match(html, /function buildOutputFileName\(data\) \{/);
+  assert.match(html, /const namePart = data\.template_type === "other"/);
+  assert.match(html, /\? sanitizeFileNamePart\(data\.product_name \|\| "产品名称"\)/);
+  assert.match(html, /: sanitizeFileNamePart\(data\.company_name \|\| "企业名称"\)/);
+  assert.match(html, /return `\$\{mm\}\$\{dd\}-\$\{namePart\}-\$\{versionNo\}版\.docx`;/);
+});

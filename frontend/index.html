@@ -1209,8 +1209,10 @@
         : String(now.getDate()).padStart(2, "0");
       const target = getSelectedVersionTarget();
       const versionNo = target && Number.isInteger(target.versionNo) && target.versionNo >= 1 ? target.versionNo : 1;
-      const company = sanitizeFileNamePart(data.company_name || "企业名称");
-      return `${mm}${dd}-${company}-${versionNo}版.docx`;
+      const namePart = data.template_type === "other"
+        ? sanitizeFileNamePart(data.product_name || "产品名称")
+        : sanitizeFileNamePart(data.company_name || "企业名称");
+      return `${mm}${dd}-${namePart}-${versionNo}版.docx`;
     }
 
     async function refreshDraftPickers(preferredCompany = "", preferredEntry = "") {

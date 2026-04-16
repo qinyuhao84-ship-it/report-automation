@@ -209,11 +209,23 @@ def generate_other_chapter1_section(
         generated_sections=normalized_generated,
     )
     normalized_section_list, normalize_warnings = normalize_chapter1_sections([section_raw])
-    section = normalized_section_list[0] if normalized_section_list else section_raw
+    section = next(
+        (
+            item
+            for item in normalized_section_list
+            if str(item.get("key") or "").strip() == spec["key"]
+        ),
+        section_raw,
+    )
     warnings: List[str] = []
     if section_warning:
         warnings.append(f"第一章《{spec['title']}》{section_warning}")
-    warnings.extend(normalize_warnings)
+    current_title_prefix = f"第一章《{spec['title']}》"
+    warnings.extend(
+        item
+        for item in normalize_warnings
+        if current_title_prefix in str(item or "")
+    )
     return {"section": section, "warnings": warnings}
 
 

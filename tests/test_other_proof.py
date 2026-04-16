@@ -21,6 +21,7 @@ from other_proof import (
     _validate_manual_company_profiles,
     _ensure_supply_chain_subsections,
     generate_other_chapter1,
+    generate_other_chapter1_section,
     lookup_other_companies,
     normalize_chapter1_sections,
 )
@@ -255,6 +256,52 @@ def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatc
     section_map = {item["key"]: item for item in result["sections"]}
     assert "高安全性自锁紧型电源连接系统" in section_map["definition"]["paragraphs"][0]
     assert any("行业需求" in p for p in section_map["industry_supply_chain"]["paragraphs"])
+
+
+def test_generate_other_chapter1_section_returns_requested_section(monkeypatch):
+    requested_key = "definition"
+
+    class FakeClient:
+        def complete(self, *_args, **_kwargs):
+            return json.dumps(
+                {
+                    "section": {
+                        "key": requested_key,
+                        "title": other_proof.CHAPTER1_SPEC_MAP[requested_key]["title"],
+                        "paragraphs": [
+                            "该产品是面向高可靠连接场景的关键部件体系，强调稳定传输和安全冗余。",
+                            "其定义边界聚焦于连接功能与防护能力，不延展到无关业务领域。",
+                        ],
+                    }
+                },
+                ensure_ascii=False,
+            )
+
+    class FakeOrchestrator:
+        def __init__(self):
+            self.client = FakeClient()
+
+        def is_available(self):
+            return True
+
+    monkeypatch.setattr(
+        other_proof.LLMOrchestrator,
+        "from_config",
+        staticmethod(lambda _config: FakeOrchestrator()),
+    )
+
+    result = generate_other_chapter1_section(
+        "高安全性自锁紧型电源连接系统",
+        requested_key,
+        [],
+        other_proof.InferenceConfig(),
+    )
+
+    section = result["section"]
+    assert section["key"] == requested_key
+    assert section["title"] == other_proof.CHAPTER1_SPEC_MAP[requested_key]["title"]
+    assert any(p != other_proof.PLACEHOLDER_TEXT for p in section["paragraphs"])
+    assert section["paragraphs"][0].startswith("该产品是面向高可靠连接场景")
 
 
 def test_normalize_chapter1_sections_merges_heading_fragments():
