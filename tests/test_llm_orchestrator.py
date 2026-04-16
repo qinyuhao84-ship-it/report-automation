@@ -294,3 +294,27 @@ def test_openai_client_does_not_retry_on_400():
     with pytest.raises(httpx.HTTPStatusError):
         client.complete([{"role": "user", "content": "hi"}], section_key="definition")
     assert calls["count"] == 1
+
+
+def test_openai_client_retry_override_disables_retries():
+    calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        return httpx.Response(429, json={"error": "rate limit"}, request=request)
+
+    client = OpenAICompatibleClient(
+        api_base="https://proxy.example.com/v1",
+        api_key="sk-test",
+        model="gpt-5.1-codex",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        retry_max_attempts=3,
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.complete(
+            [{"role": "user", "content": "hi"}],
+            section_key="background_overview",
+            retry_max_attempts=0,
+        )
+    assert calls["count"] == 1

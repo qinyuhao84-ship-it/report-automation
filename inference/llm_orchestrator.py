@@ -248,6 +248,7 @@ class OpenAICompatibleClient:
         temperature: float = 0.0,
         max_output_tokens: Optional[int] = None,
         timeout_seconds: Optional[int] = None,
+        retry_max_attempts: Optional[int] = None,
         section_key: str = "",
     ) -> str:
         payload = {
@@ -268,7 +269,8 @@ class OpenAICompatibleClient:
             request_timeout = None
         else:
             request_timeout = httpx.Timeout(timeout_seconds)
-        total_attempts = self.retry_max_attempts + 1
+        max_attempts = self.retry_max_attempts if retry_max_attempts is None else max(0, int(retry_max_attempts))
+        total_attempts = max_attempts + 1
         last_error: Optional[Exception] = None
         for attempt in range(total_attempts):
             started_at = time.monotonic()
@@ -294,7 +296,7 @@ class OpenAICompatibleClient:
                 transient = _is_transient_llm_error(exc)
                 duration_ms = int((time.monotonic() - started_at) * 1000)
                 wait_ms = 0
-                should_retry = transient and attempt < self.retry_max_attempts
+                should_retry = transient and attempt < max_attempts
 
                 if should_retry:
                     retry_after_ms = _extract_retry_after_ms(exc)

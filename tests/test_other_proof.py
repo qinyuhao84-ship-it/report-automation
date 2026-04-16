@@ -125,8 +125,10 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
     assert len(result["sections"]) == 9
     assert len(fake_client.calls) == 9
     kwargs = fake_client.calls[0]["kwargs"]
-    assert kwargs["timeout_seconds"] == 300
+    assert kwargs["timeout_seconds"] <= 300
+    assert kwargs["timeout_seconds"] >= 4
     assert kwargs["max_output_tokens"] == 2400
+    assert kwargs["retry_max_attempts"] == 0
     assert kwargs["section_key"] == "background_overview"
 
 

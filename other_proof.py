@@ -171,6 +171,52 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
     return {"sections": normalized, "warnings": warnings}
 
 
+def generate_other_chapter1_section(
+    product_name: str,
+    section_key: str,
+    generated_sections: Sequence[Dict[str, Any]],
+    config: InferenceConfig,
+) -> Dict[str, Any]:
+    if not product_name or not product_name.strip():
+        raise OtherProofError("主导产品名称不能为空")
+    normalized_key = str(section_key or "").strip()
+    spec = CHAPTER1_SPEC_MAP.get(normalized_key)
+    if not spec:
+        raise OtherProofError("第一章小节标识无效")
+
+    orchestrator = LLMOrchestrator.from_config(config)
+    if not orchestrator.is_available() or orchestrator.client is None:
+        raise OtherProofError("LLM 未配置，无法生成他证第一章")
+
+    product = product_name.strip()
+    chapter1_timeout_seconds = max(20, int(config.llm_timeout_seconds))
+    chapter1_model = _resolve_chapter1_model_name(
+        config.llm_model,
+        getattr(orchestrator.client, "model", "") or config.llm_model,
+    )
+    chapter1_max_output_tokens = max(1200, min(int(config.llm_max_output_tokens), 2400))
+    if _is_reasoner_model(chapter1_model):
+        chapter1_max_output_tokens = 2400
+
+    normalized_generated, _ = normalize_chapter1_sections(list(generated_sections or []))
+    section_raw, section_warning = _generate_chapter1_section(
+        client=orchestrator.client,
+        product_name=product,
+        spec=spec,
+        model=chapter1_model,
+        timeout_seconds=chapter1_timeout_seconds,
+        max_output_tokens=chapter1_max_output_tokens,
+        generated_sections=normalized_generated,
+    )
+    normalized_section_list, normalize_warnings = normalize_chapter1_sections([section_raw])
+    section = normalized_section_list[0] if normalized_section_list else section_raw
+    warnings: List[str] = []
+    if section_warning:
+        warnings.append(f"第一章《{spec['title']}》{section_warning}")
+    warnings.extend(normalize_warnings)
+    return {"section": section, "warnings": warnings}
+
+
 def _generate_chapter1_section(
     *,
     client: Any,
@@ -208,6 +254,7 @@ def _generate_chapter1_section(
         temperature=0.2,
         max_output_tokens=max_output_tokens,
         timeout_seconds=timeout_seconds,
+        retry_max_attempts=0,
         section_key=section_key,
     )
     warning = ""
@@ -1776,6 +1823,7 @@ def _repair_empty_chapter1_sections(
             temperature=0.1,
             max_output_tokens=max(1400, min(max_output_tokens, 5000)),
             timeout_seconds=timeout_seconds,
+            retry_max_attempts=0,
         )
     except Exception:
         return list(sections), ["第一章缺失章节补全请求失败，已保留当前内容"], []

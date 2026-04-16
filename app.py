@@ -24,6 +24,7 @@ from other_proof import (
     OtherProofError,
     OtherProofTimeoutError,
     generate_other_chapter1,
+    generate_other_chapter1_section,
     generate_other_docx,
     lookup_other_companies,
 )
@@ -378,6 +379,12 @@ class CompanyLookupItem(BaseModel):
 class Chapter1Request(BaseModel):
     product_name: str
     allow_partial: bool = False
+
+
+class Chapter1SectionRequest(BaseModel):
+    product_name: str
+    section_key: str
+    generated_sections: List[Chapter1Section] = Field(default_factory=list)
 
 
 class CompanyLookupRequest(BaseModel):
@@ -905,6 +912,23 @@ def generate_other_proof_chapter1_api(payload: Chapter1Request):
             payload.product_name,
             InferenceConfig(),
             allow_partial=bool(payload.allow_partial),
+        )
+    except OtherProofTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc))
+    except OtherProofError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/other-proof/chapter1-section")
+def generate_other_proof_chapter1_section_api(payload: Chapter1SectionRequest):
+    try:
+        return generate_other_chapter1_section(
+            payload.product_name,
+            payload.section_key,
+            [item.model_dump() for item in payload.generated_sections],
+            InferenceConfig(),
         )
     except OtherProofTimeoutError as exc:
         raise HTTPException(status_code=504, detail=str(exc))

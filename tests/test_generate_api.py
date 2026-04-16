@@ -163,6 +163,48 @@ def test_other_chapter1_endpoint_passes_allow_partial(monkeypatch):
     assert resp.json().get("warnings") == ["allow_partial=true"]
 
 
+def test_other_chapter1_section_endpoint_returns_section(monkeypatch):
+    client = TestClient(app_module.app)
+
+    def fake_generate_other_chapter1_section(product_name, section_key, generated_sections, _config):
+        assert product_name == "示例产品"
+        assert section_key == "background_overview"
+        assert isinstance(generated_sections, list)
+        return {
+            "section": {"key": "background_overview", "title": "背景与概述", "paragraphs": ["段落1"]},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(app_module, "generate_other_chapter1_section", fake_generate_other_chapter1_section)
+
+    resp = client.post(
+        "/other-proof/chapter1-section",
+        json={"product_name": "示例产品", "section_key": "background_overview", "generated_sections": []},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["section"]["key"] == "background_overview"
+    assert body["warnings"] == []
+
+
+def test_other_chapter1_section_endpoint_returns_504_on_timeout(monkeypatch):
+    client = TestClient(app_module.app)
+
+    def fake_generate_other_chapter1_section(_product_name, _section_key, _generated_sections, _config):
+        raise app_module.OtherProofTimeoutError("第一章《背景与概述》生成失败，请重试。")
+
+    monkeypatch.setattr(app_module, "generate_other_chapter1_section", fake_generate_other_chapter1_section)
+
+    resp = client.post(
+        "/other-proof/chapter1-section",
+        json={"product_name": "示例产品", "section_key": "background_overview", "generated_sections": []},
+    )
+
+    assert resp.status_code == 504
+    assert "第一章《背景与概述》生成失败" in resp.json().get("detail", "")
+
+
 def test_rewrite_header_titles_updates_matching_header_paragraph():
     ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     header_xml = f"""
