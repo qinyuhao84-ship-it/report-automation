@@ -53,9 +53,9 @@ def test_chapter1_section_prompt_has_consulting_style_constraints():
     assert '"section"' in prompt
 
 
-def test_resolve_chapter1_model_name_maps_deepseek_r1_to_reasoner():
-    assert _resolve_chapter1_model_name("deepseek-r1", "deepseek-r1") == "deepseek-reasoner"
-    assert _resolve_chapter1_model_name("deepseek-reasoner", "deepseek-reasoner") == "deepseek-reasoner"
+def test_resolve_chapter1_model_name_maps_deepseek_r1_to_chat():
+    assert _resolve_chapter1_model_name("deepseek-r1", "deepseek-r1") == "deepseek-chat"
+    assert _resolve_chapter1_model_name("deepseek-reasoner", "deepseek-reasoner") == "deepseek-chat"
     assert _resolve_chapter1_model_name("deepseek-chat", "deepseek-chat") == "deepseek-chat"
 
 

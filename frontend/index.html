@@ -2191,7 +2191,7 @@
           return false;
         }
         updateChapter1State("第一章：生成失败");
-        setStatus("第一章生成失败：网络异常", "error");
+        setStatus("第一章生成失败：连接中断（常见原因：模型响应过慢或服务超时）", "error");
         return false;
       } finally {
         otherChapter1AbortController = null;

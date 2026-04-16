@@ -227,8 +227,9 @@ def _generate_chapter1_section(
 def _resolve_chapter1_model_name(config_model: str, fallback_model: str) -> str:
     model = str(config_model or fallback_model or "").strip()
     lower = model.lower()
-    if lower == "deepseek-r1":
-        return "deepseek-reasoner"
+    # 第一章是串行多小节生成，R1/Reasoner 在该场景下耗时明显更高，容易触发网关断连。
+    if lower in {"deepseek-r1", "deepseek-reasoner"}:
+        return "deepseek-chat"
     return model or fallback_model
 
 
