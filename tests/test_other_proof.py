@@ -586,28 +586,47 @@ def test_ensure_supply_chain_subsections_splits_combined_markers():
     assert "B" in result[2]
 
 
-def test_reflow_industry_environment_paragraphs_starts_with_section_heading():
+def test_normalize_industry_environment_strips_synthetic_topic_headings():
     sections, _warnings = normalize_chapter1_sections(
         [
             {
                 "key": "industry_environment",
                 "title": "行业发展环境",
                 "paragraphs": [
-                    "行业发展环境受到政策、经济、技术和社会因素协同影响。",
-                    "政策端持续强化安全与质量约束。",
-                    "经济端投资结构向高端制造倾斜。",
-                    "技术端关键部件持续迭代升级。",
-                    "社会端对高可靠供电安全要求持续提升。",
+                    "（一）行业发展环境 基于产品特性，行业发展受到政策与技术双重驱动。",
+                    "1. 政策环境 政策端持续强化安全与质量约束。",
+                    "2. 经济环境 经济端投资结构向高端制造倾斜。",
+                    "3. 技术环境 技术端关键部件持续迭代升级。",
+                    "4. 社会环境 社会端对高可靠供电安全要求持续提升。",
                 ],
             }
         ]
     )
     target = next(item for item in sections if item["key"] == "industry_environment")
-    assert target["paragraphs"][0] == "（一）行业发展环境"
-    assert target["paragraphs"][2] == "1. 政策环境"
-    assert target["paragraphs"][5] == "2. 经济环境"
-    assert target["paragraphs"][9] == "3. 技术环境"
-    assert target["paragraphs"][13] == "4. 社会环境"
+    assert all(not paragraph.startswith("（一）行业发展环境") for paragraph in target["paragraphs"])
+    assert all(not paragraph.startswith("1. 政策环境") for paragraph in target["paragraphs"])
+    assert any("政策端持续强化安全与质量约束" in paragraph for paragraph in target["paragraphs"])
+
+
+def test_mark_footer_page_fields_dirty_sets_begin_fields_dirty():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    footer_xml = f"""
+    <w:ftr xmlns:w="{ns}">
+      <w:p>
+        <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+        <w:r><w:instrText> PAGE  \\* MERGEFORMAT </w:instrText></w:r>
+        <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+        <w:r><w:t>1</w:t></w:r>
+        <w:r><w:fldChar w:fldCharType="end"/></w:r>
+      </w:p>
+    </w:ftr>
+    """.strip().encode("utf-8")
+    file_map = {"word/footer1.xml": footer_xml}
+    other_proof._mark_footer_page_fields_dirty(file_map)
+    root = ET.fromstring(file_map["word/footer1.xml"])
+    begin = root.find(f".//{{{ns}}}fldChar[@{{{ns}}}fldCharType='begin']")
+    assert begin is not None
+    assert begin.get(f"{{{ns}}}dirty") == "true"
 
 
 def test_split_paragraph_for_template_does_not_split_on_comma():
@@ -651,6 +670,55 @@ def test_set_signature_block_right_alignment_sets_signature_to_right():
         jc = paragraph.find(f"./{{{ns}}}pPr/{{{ns}}}jc")
         assert jc is not None
         assert jc.get(f"{{{ns}}}val") == "right"
+
+
+def test_enable_word_update_fields_on_open_sets_settings_flag():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    settings_xml = f"""
+    <w:settings xmlns:w="{ns}">
+      <w:zoom w:percent="120"/>
+    </w:settings>
+    """.strip().encode("utf-8")
+    file_map = {"word/settings.xml": settings_xml}
+    other_proof._enable_word_update_fields_on_open(file_map)
+    root = ET.fromstring(file_map["word/settings.xml"])
+    node = root.find(f"./{{{ns}}}updateFields")
+    assert node is not None
+    assert node.get(f"{{{ns}}}val") == "true"
+
+
+def test_compress_chapter1_visual_paragraphs_skips_environment_and_trends():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    root = ET.fromstring(f'<w:document xmlns:w="{ns}"><w:body/></w:document>')
+    body = root.find(f".//{{{ns}}}body")
+    assert body is not None
+    field_paragraphs = []
+    total_slots = 20 + sum(item["slot_count"] for item in other_proof.CHAPTER1_SECTION_SPECS)
+    for idx in range(total_slots):
+        p = ET.Element(f"{{{ns}}}p")
+        r = ET.SubElement(p, f"{{{ns}}}r")
+        t = ET.SubElement(r, f"{{{ns}}}t")
+        t.text = f"slot-{idx}"
+        body.append(p)
+        field_paragraphs.append(p)
+
+    cursor = 20
+    for spec in other_proof.CHAPTER1_SECTION_SPECS:
+        if spec["key"] in {"industry_environment", "industry_trends"}:
+            for i in range(spec["slot_count"]):
+                other_proof._set_paragraph_text(field_paragraphs[cursor + i], f"{spec['key']}-{i}")
+        cursor += spec["slot_count"]
+
+    snapshot = [ET.tostring(p, encoding="unicode") for p in field_paragraphs]
+    other_proof._compress_chapter1_visual_paragraphs(root, field_paragraphs)
+    cursor = 20
+    for spec in other_proof.CHAPTER1_SECTION_SPECS:
+        if spec["key"] in {"industry_environment", "industry_trends"}:
+            for i in range(spec["slot_count"]):
+                current = ET.tostring(field_paragraphs[cursor + i], encoding="unicode")
+                before = snapshot[cursor + i]
+                assert current == before
+        cursor += spec["slot_count"]
 
 
 def test_rewrite_other_header_titles_updates_header_company_and_product():

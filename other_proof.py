@@ -331,11 +331,13 @@ def normalize_chapter1_sections(raw_sections: Any) -> tuple[List[Dict[str, Any]]
         key = spec["key"]
         title = spec["title"]
         slot_count = spec["slot_count"]
-        paragraphs = _merge_heading_like_paragraphs(list(normalized_map.get(key, [])))
+        source_paragraphs = list(normalized_map.get(key, []))
         if key == "industry_environment":
-            paragraphs = _reflow_industry_environment_paragraphs(paragraphs)
+            paragraphs = _sanitize_industry_environment_paragraphs(source_paragraphs)
         elif key == "industry_trends":
-            paragraphs = _reflow_industry_trends_paragraphs(paragraphs)
+            paragraphs = _sanitize_industry_trends_paragraphs(source_paragraphs)
+        else:
+            paragraphs = _merge_heading_like_paragraphs(source_paragraphs)
         if key == "industry_supply_chain":
             paragraphs = _ensure_supply_chain_subsections(paragraphs)
         if not paragraphs:
@@ -461,6 +463,8 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
         company_name=self_row["display_name"],
         product_name=str(data.get("product_name") or "").strip(),
     )
+    _enable_word_update_fields_on_open(file_map)
+    _mark_footer_page_fields_dirty(file_map)
     try:
         inject_market_charts_into_docx(
             document_root=root,
@@ -1476,6 +1480,47 @@ def _remove_section_page_number_restart(root: ET.Element) -> None:
         sect.remove(page_num)
 
 
+def _enable_word_update_fields_on_open(file_map: Dict[str, bytes]) -> None:
+    raw = file_map.get("word/settings.xml")
+    if not raw:
+        return
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return
+    update_fields = root.find("./w:updateFields", NS)
+    if update_fields is None:
+        update_fields = ET.SubElement(root, f"{{{NS['w']}}}updateFields")
+    update_fields.set(f"{{{NS['w']}}}val", "true")
+    file_map["word/settings.xml"] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _mark_footer_page_fields_dirty(file_map: Dict[str, bytes]) -> None:
+    for name, raw in list(file_map.items()):
+        if not (name.startswith("word/footer") and name.endswith(".xml")):
+            continue
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError:
+            continue
+
+        has_page_field = any(
+            "PAGE" in "".join(instr.itertext()).upper()
+            for instr in root.findall(".//w:instrText", NS)
+        )
+        if not has_page_field:
+            continue
+
+        changed = False
+        for fld in root.findall(".//w:fldChar", NS):
+            fld_type = str(fld.get(f"{{{NS['w']}}}fldCharType") or "").strip().lower()
+            if fld_type == "begin":
+                fld.set(f"{{{NS['w']}}}dirty", "true")
+                changed = True
+        if changed:
+            file_map[name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def _apply_body_plain_paragraph_justification(root: ET.Element) -> None:
     parent_map = {child: parent for parent in root.iter() for child in list(parent)}
     for paragraph in root.findall(".//w:p", NS):
@@ -1560,7 +1605,7 @@ def _compress_chapter1_visual_paragraphs(root: ET.Element, field_paragraphs: Seq
         cursor += slot_count
         if not section_paragraphs:
             continue
-        if spec["key"] == "industry_supply_chain":
+        if spec["key"] in {"industry_environment", "industry_trends", "industry_supply_chain"}:
             # 供应链章节模板里存在固定小节标题结构，禁止做可视压缩，避免标题与正文错位。
             continue
 
@@ -1767,91 +1812,67 @@ def _normalize_supply_chain_content(text: str, *, topic: str) -> str:
     return f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
 
 
-def _reflow_industry_environment_paragraphs(paragraphs: Sequence[str]) -> List[str]:
-    section_title = "（一）行业发展环境"
-    topic_names = ["政策环境", "经济环境", "技术环境", "社会环境"]
-    topic_targets = [2, 3, 3, 3]
-    intro_default = "行业发展环境由政策、经济、技术与社会要素共同驱动，四类因素协同作用并持续影响行业路径。"
-    return _reflow_topic_section_paragraphs(
+def _sanitize_industry_environment_paragraphs(paragraphs: Sequence[str]) -> List[str]:
+    return _sanitize_named_topic_paragraphs(
         paragraphs=paragraphs,
-        section_title=section_title,
-        topic_names=topic_names,
-        topic_targets=topic_targets,
-        intro_default=intro_default,
-        include_section_title_slot=True,
+        section_titles=["行业发展环境", "行业发展环境和趋势"],
+        topic_titles=["政策环境", "经济环境", "技术环境", "社会环境"],
     )
 
 
-def _reflow_industry_trends_paragraphs(paragraphs: Sequence[str]) -> List[str]:
-    topic_names = ["技术迭代趋势", "产品发展趋势", "市场需求趋势", "行业竞争趋势", "产业链发展趋势"]
-    topic_targets = [4, 4, 4, 5, 5]
-    intro_default = "行业发展趋势围绕技术升级、产品演进、需求扩张、竞争重构与产业链优化五个方向同步推进。"
-    return _reflow_topic_section_paragraphs(
+def _sanitize_industry_trends_paragraphs(paragraphs: Sequence[str]) -> List[str]:
+    return _sanitize_named_topic_paragraphs(
         paragraphs=paragraphs,
-        section_title="（二）行业发展趋势",
-        topic_names=topic_names,
-        topic_targets=topic_targets,
-        intro_default=intro_default,
-        include_section_title_slot=False,
+        section_titles=["行业发展趋势", "行业发展环境和趋势"],
+        topic_titles=["技术迭代趋势", "产品发展趋势", "市场需求趋势", "行业竞争趋势", "产业链发展趋势"],
     )
 
 
-def _reflow_topic_section_paragraphs(
+def _sanitize_named_topic_paragraphs(
     *,
     paragraphs: Sequence[str],
-    section_title: str,
-    topic_names: Sequence[str],
-    topic_targets: Sequence[int],
-    intro_default: str,
-    include_section_title_slot: bool,
+    section_titles: Sequence[str],
+    topic_titles: Sequence[str],
 ) -> List[str]:
-    cleaned = [str(item).strip() for item in paragraphs if str(item).strip()]
-    if not cleaned:
-        return [section_title, intro_default] if include_section_title_slot else [intro_default]
+    if not paragraphs:
+        return []
 
-    buckets: List[List[str]] = [[] for _ in topic_names]
-    intro_candidates: List[str] = []
-    current_topic_idx: int | None = None
+    section_pattern = "|".join(re.escape(item) for item in section_titles if item)
+    topic_pattern = "|".join(re.escape(item) for item in topic_titles if item)
+    section_title_set = {item.strip() for item in section_titles if item.strip()}
+    topic_title_set = {item.strip() for item in topic_titles if item.strip()}
 
-    for text in cleaned:
-        normalized = re.sub(r"\s+", "", text)
-        if include_section_title_slot and "行业发展环境" in normalized:
-            continue
-        if (not include_section_title_slot) and "行业发展趋势" in normalized:
-            continue
+    cleaned: List[str] = []
+    for raw in paragraphs:
+        text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+        segments = [segment.strip() for segment in re.split(r"\n+", text) if segment.strip()]
+        for segment in segments:
+            current = segment
+            if section_pattern:
+                current = re.sub(
+                    rf"^\s*[（(]?[一二三四五六七八九十0-9]+[）)]?[\.、]?\s*(?:{section_pattern})\s*[:：]?\s*",
+                    "",
+                    current,
+                )
+            if topic_pattern:
+                current = re.sub(
+                    rf"^\s*[（(]?[一二三四五六七八九十0-9]+[）)]?[\.、]?\s*(?:{topic_pattern})\s*[:：]?\s*",
+                    "",
+                    current,
+                )
+                current = re.sub(
+                    rf"\s+[（(]?[一二三四五六七八九十0-9]+[）)]?[\.、]?\s*(?:{topic_pattern})\s*[:：]?\s*",
+                    " ",
+                    current,
+                )
+            current = re.sub(r"\s{2,}", " ", current).strip(" ：:;；，,")
+            if not current:
+                continue
+            if current in section_title_set or current in topic_title_set:
+                continue
+            cleaned.append(current)
 
-        matched_idx = None
-        for idx, topic in enumerate(topic_names):
-            if topic in normalized:
-                matched_idx = idx
-                break
-        if matched_idx is not None:
-            current_topic_idx = matched_idx
-            continue
-
-        if current_topic_idx is None:
-            intro_candidates.append(text)
-        else:
-            buckets[current_topic_idx].append(text)
-
-    intro = intro_candidates[0] if intro_candidates else intro_default
-    overflow = intro_candidates[1:]
-    for idx, text in enumerate(overflow):
-        buckets[idx % len(buckets)].append(text)
-
-    for idx, target in enumerate(topic_targets):
-        if not buckets[idx]:
-            buckets[idx] = [f"该部分用于说明{topic_names[idx]}，请结合公开行业资料补充核心驱动因素、行业特征与演进方向。"]
-        buckets[idx] = _fit_topic_bucket_to_target(buckets[idx], target)
-
-    result: List[str] = []
-    if include_section_title_slot:
-        result.append(section_title)
-    result.append(intro)
-    for idx, topic in enumerate(topic_names, start=1):
-        result.append(f"{idx}. {topic}")
-        result.extend(buckets[idx - 1])
-    return result
+    return _merge_heading_like_paragraphs(cleaned)
 
 
 def _fit_topic_bucket_to_target(paragraphs: Sequence[str], target: int) -> List[str]:
@@ -1892,12 +1913,32 @@ def _fit_supply_chain_paragraphs_to_slot_count(paragraphs: Sequence[str], title:
                 f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
             )
     extra = cleaned[1 + len(SUPPLY_CHAIN_SUBTOPICS):]
-    for idx, text in enumerate(extra):
-        bucket_index = idx % len(topic_buckets)
-        topic = SUPPLY_CHAIN_SUBTOPICS[bucket_index]
-        topic_buckets[bucket_index].append(_normalize_supply_chain_content(text, topic=topic))
+    target_per_topic = [4, 3, 3, 2, 5]
 
-    target_per_topic = [4, 3, 3, 3, 4]
+    def _guess_supply_chain_topic_index(text: str) -> int | None:
+        normalized = str(text or "")
+        rules = [
+            (0, ["上游", "原材料", "核心零部件", "器件"]),
+            (1, ["中游", "制造", "装配", "集成", "生产"]),
+            (2, ["下游", "应用", "客户", "分销", "渠道终端"]),
+            (3, ["核心特征", "挑战", "风险", "瓶颈"]),
+            (4, ["发展方向", "优化", "趋势", "未来", "转型"]),
+        ]
+        for idx, keywords in rules:
+            if any(keyword in normalized for keyword in keywords):
+                return idx
+        return None
+
+    ordered_topic_idx = 0
+    for text in extra:
+        guessed = _guess_supply_chain_topic_index(text)
+        if guessed is None:
+            while ordered_topic_idx < len(topic_buckets) - 1 and len(topic_buckets[ordered_topic_idx]) >= target_per_topic[ordered_topic_idx]:
+                ordered_topic_idx += 1
+            guessed = ordered_topic_idx
+        topic = SUPPLY_CHAIN_SUBTOPICS[guessed]
+        topic_buckets[guessed].append(_normalize_supply_chain_content(text, topic=topic))
+
     fitted_topics: List[List[str]] = []
     for bucket, target in zip(topic_buckets, target_per_topic):
         fitted_topics.append(_fit_topic_bucket_to_target(bucket, target))
