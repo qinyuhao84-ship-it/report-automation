@@ -1021,11 +1021,44 @@
       }
     }
 
-    function getOtherChapter1Cache(companyName) {
+    function chapter1SectionsContainPlaceholder(sections) {
+      if (!Array.isArray(sections) || sections.length !== CHAPTER1_SECTION_SPECS.length) return true;
+      const expectedKeys = new Set(CHAPTER1_SECTION_SPECS.map((item) => item.key));
+      const seenKeys = new Set();
+      for (const section of sections) {
+        if (!section || typeof section !== "object") return true;
+        const key = String(section.key || "").trim();
+        if (!expectedKeys.has(key) || seenKeys.has(key)) return true;
+        seenKeys.add(key);
+        const paragraphs = Array.isArray(section.paragraphs) ? section.paragraphs : [];
+        const hasNonPlaceholder = paragraphs.some((item) => {
+          const text = String(item || "").trim();
+          return !!text && text !== CHAPTER1_PLACEHOLDER_TEXT;
+        });
+        if (!hasNonPlaceholder) return true;
+      }
+      return false;
+    }
+
+    function isReusableOtherChapter1CacheEntry(entry, productName = "") {
+      if (!entry || typeof entry !== "object") return false;
+      if (chapter1SectionsContainPlaceholder(entry.sections)) return false;
+      const expectedProduct = String(productName || "").trim();
+      if (!expectedProduct) return true;
+      const cachedProduct = String(entry.product_name || "").trim();
+      return cachedProduct === expectedProduct;
+    }
+
+    function getOtherChapter1Cache(companyName, productName = "") {
       const key = normalizeCompanyCacheKey(companyName);
       if (!key) return null;
       const entry = otherProofChapter1CacheByCompany[key];
-      if (!entry || !Array.isArray(entry.sections) || !entry.sections.length) return null;
+      if (!entry) return null;
+      if (!isReusableOtherChapter1CacheEntry(entry, productName)) {
+        delete otherProofChapter1CacheByCompany[key];
+        persistOtherChapter1CacheToStorage();
+        return null;
+      }
       return entry;
     }
 
@@ -1050,7 +1083,8 @@
     }
 
     function applyCompanyChapter1Cache(companyName) {
-      const entry = getOtherChapter1Cache(companyName);
+      const product = document.getElementById("product_name")?.value || "";
+      const entry = getOtherChapter1Cache(companyName, product);
       otherProofChapter1Sections = entry ? entry.sections : [];
       if (isOtherTemplate()) {
         updateChapter1State(
@@ -2156,7 +2190,7 @@
         return false;
       }
       if (!force) {
-        const cached = getOtherChapter1Cache(companyName);
+        const cached = getOtherChapter1Cache(companyName, product);
         if (cached) {
           otherProofChapter1Sections = cached.sections;
           updateChapter1State(`第一章：已复用企业缓存 ${otherProofChapter1Sections.length} 个小节`);
@@ -2249,9 +2283,16 @@
         }
 
         otherProofChapter1Sections = generatedSections;
-        setOtherChapter1Cache(companyName, otherProofChapter1Sections, product);
+        const hasPlaceholderSection = chapter1SectionsContainPlaceholder(otherProofChapter1Sections);
+        if (hasPlaceholderSection) {
+          clearOtherChapter1Cache(companyName);
+        } else {
+          setOtherChapter1Cache(companyName, otherProofChapter1Sections, product);
+        }
         saveDraft(true);
-        if (warnings.length) {
+        if (hasPlaceholderSection) {
+          updateChapter1State(`第一章：已生成 ${otherProofChapter1Sections.length} 个小节，但存在占位内容（未缓存）`);
+        } else if (warnings.length) {
           updateChapter1State(`第一章：已生成并缓存 ${otherProofChapter1Sections.length} 个小节，部分内容需人工补充`);
         } else {
           updateChapter1State(`第一章：已生成并缓存 ${otherProofChapter1Sections.length} 个小节`);
