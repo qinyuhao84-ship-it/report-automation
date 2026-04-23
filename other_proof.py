@@ -66,6 +66,7 @@ SUPPLY_CHAIN_SUBTOPICS: List[str] = [
 CHAPTER1_SPEC_MAP = {item["key"]: item for item in CHAPTER1_SECTION_SPECS}
 EXPECTED_CHAPTER1_SLOT_COUNT = sum(item["slot_count"] for item in CHAPTER1_SECTION_SPECS)
 PLACEHOLDER_TEXT = "该部分生成失败，请人工补充。"
+CHAPTER1_RETRY_GUIDANCE = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。"
 AIQICHA_TIMEOUT = 20.0
 SEARCH_TIMEOUT = 20.0
 BROWSER_HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -91,46 +92,33 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
         raise OtherProofError("LLM 未配置，无法生成他证第一章")
 
     product = product_name.strip()
-    chapter1_timeout_seconds = max(20, int(config.llm_timeout_seconds))
+    # timeout_seconds <= 0 时，底层客户端会关闭请求超时限制。
+    chapter1_timeout_seconds = 0
     chapter1_model = _resolve_chapter1_model_name(
         config.llm_model,
         getattr(orchestrator.client, "model", "") or config.llm_model,
     )
-    chapter1_max_output_tokens = max(1200, min(int(config.llm_max_output_tokens), 2400))
+    chapter1_max_output_tokens = max(3200, min(int(config.llm_max_output_tokens), 5200))
     if _is_reasoner_model(chapter1_model):
-        chapter1_max_output_tokens = 2400
-    raw_sections: List[Dict[str, Any]] = []
+        chapter1_max_output_tokens = 4200
     warnings: List[str] = []
-    successful_sections = 0
 
-    for spec in CHAPTER1_SECTION_SPECS:
-        key = spec["key"]
-        title = spec["title"]
-        try:
-            section_raw, section_warning = _generate_chapter1_section(
-                client=orchestrator.client,
-                product_name=product,
-                spec=spec,
-                model=chapter1_model,
-                timeout_seconds=chapter1_timeout_seconds,
-                max_output_tokens=chapter1_max_output_tokens,
-                generated_sections=raw_sections,
-            )
-            raw_sections.append(section_raw)
-            successful_sections += 1
-            if section_warning:
-                warnings.append(f"第一章《{title}》{section_warning}")
-        except Exception as exc:
-            if not allow_partial:
-                raise OtherProofTimeoutError(
-                    f"第一章《{title}》生成失败，请重试。若需继续生成，可勾选“第一章失败后跳过继续生成”。"
-                ) from exc
-            warnings.append(f"第一章《{title}》生成失败，已写入占位内容")
-
-    if successful_sections == 0:
-        raise OtherProofTimeoutError(
-            "第一章生成超时。你可以直接重试，或勾选“第一章失败后跳过继续生成”。"
+    try:
+        raw_sections, raw_warning = _generate_chapter1_sections_once(
+            client=orchestrator.client,
+            product_name=product,
+            model=chapter1_model,
+            timeout_seconds=chapter1_timeout_seconds,
+            max_output_tokens=chapter1_max_output_tokens,
         )
+    except Exception as exc:
+        raise OtherProofTimeoutError(CHAPTER1_RETRY_GUIDANCE) from exc
+
+    if raw_warning:
+        warnings.append(raw_warning)
+
+    if not raw_sections:
+        raise OtherProofTimeoutError(CHAPTER1_RETRY_GUIDANCE)
 
     normalized, normalize_warnings = normalize_chapter1_sections(raw_sections)
     warnings.extend(normalize_warnings)
@@ -166,9 +154,102 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
             if not non_placeholder:
                 strict_failed_titles.append(spec["title"])
         if strict_failed_titles:
-            raise OtherProofTimeoutError("第一章关键小节生成失败：" + "、".join(strict_failed_titles))
+            raise OtherProofTimeoutError(
+                "第一章有部分小节尚未生成完成（"
+                + "、".join(strict_failed_titles)
+                + "）。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。"
+            )
 
     return {"sections": normalized, "warnings": warnings}
+
+
+def _generate_chapter1_sections_once(
+    *,
+    client: Any,
+    product_name: str,
+    model: str,
+    timeout_seconds: int,
+    max_output_tokens: int,
+) -> tuple[List[Dict[str, Any]], str]:
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是产业研究分析师。"
+                "当前任务是一次性生成第一章全部 9 个小节。"
+                "只输出 JSON，不要解释，不要 Markdown 代码块。"
+                "不得编造企业私有信息。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": _build_chapter1_prompt(product_name),
+        },
+    ]
+    raw = client.complete(
+        messages,
+        model=model,
+        temperature=0.15,
+        max_output_tokens=max_output_tokens,
+        timeout_seconds=timeout_seconds,
+        retry_max_attempts=1,
+    )
+
+    warning = ""
+    raw_sections: Any
+    try:
+        parsed = _extract_json_payload(raw)
+        raw_sections = parsed.get("sections")
+        if not isinstance(raw_sections, list):
+            raise OtherProofError("第一章 JSON 缺少 sections 数组")
+    except OtherProofError:
+        raw_sections, warning = _coerce_chapter1_sections_from_text(raw)
+
+    aligned_sections, align_warning = _align_full_chapter1_sections(raw_sections)
+    if align_warning:
+        warning = f"{warning}；{align_warning}" if warning else align_warning
+    return aligned_sections, warning
+
+
+def _align_full_chapter1_sections(raw_sections: Any) -> tuple[List[Dict[str, Any]], str]:
+    if not isinstance(raw_sections, list):
+        return [], ""
+
+    cleaned: List[Dict[str, Any]] = []
+    valid_key_count = 0
+    for item in raw_sections:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        title = str(item.get("title") or "").strip()
+        paragraphs = item.get("paragraphs")
+        if not isinstance(paragraphs, list):
+            paragraphs = [paragraphs] if paragraphs else []
+        paragraph_list = [str(text).strip() for text in paragraphs if str(text).strip()]
+        if not paragraph_list:
+            continue
+        if key in CHAPTER1_SPEC_MAP:
+            valid_key_count += 1
+        cleaned.append({"key": key, "title": title, "paragraphs": paragraph_list})
+
+    if not cleaned:
+        return [], ""
+
+    expected_len = len(CHAPTER1_SECTION_SPECS)
+    if len(cleaned) < expected_len or valid_key_count >= expected_len:
+        return cleaned, ""
+
+    remapped: List[Dict[str, Any]] = []
+    for idx, spec in enumerate(CHAPTER1_SECTION_SPECS):
+        source = cleaned[idx]
+        remapped.append(
+            {
+                "key": spec["key"],
+                "title": spec["title"],
+                "paragraphs": list(source["paragraphs"]),
+            }
+        )
+    return remapped, "第一章 sections 的 key 不完整，系统已按目录顺序重排"
 
 
 def generate_other_chapter1_section(
@@ -189,7 +270,8 @@ def generate_other_chapter1_section(
         raise OtherProofError("LLM 未配置，无法生成他证第一章")
 
     product = product_name.strip()
-    chapter1_timeout_seconds = max(20, int(config.llm_timeout_seconds))
+    # 兼容手动按小节重生：同样不设置超时，避免慢模型中断。
+    chapter1_timeout_seconds = 0
     chapter1_model = _resolve_chapter1_model_name(
         config.llm_model,
         getattr(orchestrator.client, "model", "") or config.llm_model,
@@ -286,7 +368,7 @@ def _generate_chapter1_section(
 def _resolve_chapter1_model_name(config_model: str, fallback_model: str) -> str:
     model = str(config_model or fallback_model or "").strip()
     lower = model.lower()
-    # 第一章是串行多小节生成，R1/Reasoner 在该场景下耗时明显更高，容易触发网关断连。
+    # 第一章是整章一次性输出，R1/Reasoner 在该场景下耗时明显更高，容易触发网关断连。
     if lower in {"deepseek-r1", "deepseek-reasoner"}:
         return "deepseek-chat"
     return model or fallback_model

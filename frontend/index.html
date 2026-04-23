@@ -2202,86 +2202,49 @@
 
       try {
         setStatus(force ? "正在重新生成第一章..." : "正在生成第一章...");
-        updateChapter1State(`第一章：正在生成（0/${CHAPTER1_SECTION_SPECS.length}）`);
+        updateChapter1State("第一章：整章生成中（一次请求）");
+        const chapter1RetryTip = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。";
         chapter1AbortHappened = false;
         otherChapter1AbortController = new AbortController();
         setChapter1RunningState(true);
-        const generatedSections = [];
-        const warnings = [];
-
-        for (let idx = 0; idx < CHAPTER1_SECTION_SPECS.length; idx += 1) {
-          const spec = CHAPTER1_SECTION_SPECS[idx];
-          updateChapter1State(`第一章：正在生成（${idx + 1}/${CHAPTER1_SECTION_SPECS.length}）${spec.title}`);
-
-          let resp;
-          try {
-            resp = await fetch("/other-proof/chapter1-section", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              signal: otherChapter1AbortController.signal,
-              body: JSON.stringify({
-                product_name: product,
-                section_key: spec.key,
-                generated_sections: generatedSections,
-              }),
-            });
-          } catch (err) {
-            if (err && err.name === "AbortError") {
-              return false;
-            }
-            if (!allowPartial) {
-              updateChapter1State("第一章：生成失败");
-              setStatus("第一章生成失败：连接中断（模型请求未返回）", "error");
-              return false;
-            }
-            generatedSections.push({
-              key: spec.key,
-              title: spec.title,
-              paragraphs: [CHAPTER1_PLACEHOLDER_TEXT],
-            });
-            warnings.push(`第一章《${spec.title}》生成失败，已写入占位内容`);
-            continue;
+        let resp;
+        try {
+          resp = await fetch("/other-proof/chapter1", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: otherChapter1AbortController.signal,
+            body: JSON.stringify({
+              product_name: product,
+              allow_partial: allowPartial,
+            }),
+          });
+        } catch (err) {
+          if (err && err.name === "AbortError") {
+            return false;
           }
+          updateChapter1State("第一章：生成失败");
+          setStatus(chapter1RetryTip, "error");
+          return false;
+        }
 
-          if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            if (!allowPartial) {
-              updateChapter1State("第一章：生成失败");
-              if (resp.status === 504) {
-                setStatus((err.detail || "第一章生成超时") + "。可勾选“第一章失败后跳过继续生成”", "error");
-              } else {
-                setStatus(`第一章《${spec.title}》生成失败：` + (err.detail || "未知错误"), "error");
-              }
-              return false;
-            }
-            generatedSections.push({
-              key: spec.key,
-              title: spec.title,
-              paragraphs: [CHAPTER1_PLACEHOLDER_TEXT],
-            });
-            warnings.push(`第一章《${spec.title}》生成失败，已写入占位内容`);
-            continue;
-          }
-
-          const body = await resp.json().catch(() => ({}));
-          const section = body && typeof body === "object" ? body.section : null;
-          if (
-            section &&
-            typeof section === "object" &&
-            section.key &&
-            Array.isArray(section.paragraphs)
-          ) {
-            generatedSections.push(section);
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          updateChapter1State("第一章：生成失败");
+          if (resp.status === 504) {
+            setStatus(err.detail || chapter1RetryTip, "error");
           } else {
-            generatedSections.push({
-              key: spec.key,
-              title: spec.title,
-              paragraphs: [CHAPTER1_PLACEHOLDER_TEXT],
-            });
-            warnings.push(`第一章《${spec.title}》返回格式异常，已写入占位内容`);
+            setStatus(err.detail || chapter1RetryTip, "error");
           }
-          const sectionWarnings = Array.isArray(body && body.warnings) ? body.warnings : [];
-          warnings.push(...sectionWarnings);
+          return false;
+        }
+
+        const body = await resp.json().catch(() => ({}));
+        const generatedSections = Array.isArray(body && body.sections) ? body.sections : [];
+        const warnings = Array.isArray(body && body.warnings) ? body.warnings : [];
+        if (!generatedSections.length) {
+          updateChapter1State("第一章：生成失败");
+          setStatus(chapter1RetryTip, "error");
+          return false;
         }
 
         otherProofChapter1Sections = generatedSections;
@@ -2305,7 +2268,7 @@
           return false;
         }
         updateChapter1State("第一章：生成失败");
-        setStatus("第一章生成失败：连接中断（常见原因：模型响应过慢或服务超时）", "error");
+        setStatus(chapter1RetryTip, "error");
         return false;
       } finally {
         otherChapter1AbortController = null;

@@ -78,7 +78,7 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
 
         def complete(self, messages, **kwargs):
             self.calls.append({"messages": messages, "kwargs": kwargs})
-            return json_payload
+            raise AssertionError("test setup should replace complete() before invocation")
 
     class FakeOrchestrator:
         def __init__(self, client):
@@ -87,14 +87,20 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
         def is_available(self):
             return True
 
-    def _payload(key):
-        return json.dumps(
-            {
-                "section": {
+    def _payload():
+        sections = []
+        for spec in other_proof.CHAPTER1_SECTION_SPECS:
+            key = spec["key"]
+            sections.append(
+                {
                     "key": key,
                     "title": other_proof.CHAPTER1_SPEC_MAP[key]["title"],
                     "paragraphs": [f"{key} 段落 A", f"{key} 段落 B"],
                 }
+            )
+        return json.dumps(
+            {
+                "sections": sections
             },
             ensure_ascii=False,
         )
@@ -110,27 +116,20 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
         llm_timeout_seconds=300,
         llm_max_output_tokens=8192,
     )
-    original_complete = fake_client.complete
-
-    def complete_with_key(messages, **kwargs):
+    def complete_once(messages, **kwargs):
         fake_client.calls.append({"messages": messages, "kwargs": kwargs})
-        key = kwargs.get("section_key", "")
-        if key not in other_proof.CHAPTER1_SPEC_MAP:
-            raise AssertionError("missing section_key")
-        return _payload(key)
+        return _payload()
 
-    fake_client.complete = complete_with_key
+    fake_client.complete = complete_once
     result = generate_other_chapter1("高安全性自锁紧型电源连接系统", config, allow_partial=False)
-    fake_client.complete = original_complete
 
     assert len(result["sections"]) == 9
-    assert len(fake_client.calls) == 9
+    assert len(fake_client.calls) == 1
     kwargs = fake_client.calls[0]["kwargs"]
-    assert kwargs["timeout_seconds"] <= 300
-    assert kwargs["timeout_seconds"] >= 4
-    assert kwargs["max_output_tokens"] == 2400
-    assert kwargs["retry_max_attempts"] == 0
-    assert kwargs["section_key"] == "background_overview"
+    assert kwargs["timeout_seconds"] == 0
+    assert kwargs["max_output_tokens"] == 5200
+    assert kwargs["retry_max_attempts"] == 1
+    assert "section_key" not in kwargs
 
 
 def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
@@ -154,7 +153,7 @@ def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
     try:
         generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
     except other_proof.OtherProofTimeoutError as exc:
-        assert "背景与概述" in str(exc)
+        assert "暂未生成完成" in str(exc)
     else:
         raise AssertionError("expected OtherProofTimeoutError")
 
@@ -166,16 +165,15 @@ def test_generate_other_chapter1_allow_partial_writes_placeholders(monkeypatch):
 
         def complete(self, messages, **kwargs):
             self.calls.append({"messages": messages, "kwargs": kwargs})
-            key = kwargs.get("section_key", "")
-            if key in {"background_overview", "definition"}:
-                raise httpx.ReadTimeout("timed out")
             return json.dumps(
                 {
-                    "section": {
-                        "key": key,
-                        "title": other_proof.CHAPTER1_SPEC_MAP[key]["title"],
-                        "paragraphs": [f"{key} 正常段落 1", f"{key} 正常段落 2"],
-                    }
+                    "sections": [
+                        {
+                            "key": "industry_trends",
+                            "title": other_proof.CHAPTER1_SPEC_MAP["industry_trends"]["title"],
+                            "paragraphs": ["行业发展趋势段落 1", "行业发展趋势段落 2"],
+                        }
+                    ]
                 },
                 ensure_ascii=False,
             )
@@ -197,8 +195,8 @@ def test_generate_other_chapter1_allow_partial_writes_placeholders(monkeypatch):
     result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig(), allow_partial=True)
 
     assert len(result["sections"]) == 9
-    assert any("背景与概述" in item and "生成失败" in item for item in result["warnings"])
-    assert any("定义" in item and "生成失败" in item for item in result["warnings"])
+    assert any("背景与概述" in item and "未生成成功" in item for item in result["warnings"])
+    assert any("定义" in item and "未生成成功" in item for item in result["warnings"])
     background = next(item for item in result["sections"] if item["key"] == "background_overview")
     assert all(p == other_proof.PLACEHOLDER_TEXT for p in background["paragraphs"])
 
@@ -223,13 +221,18 @@ def test_generate_other_chapter1_allow_partial_all_failed_raises_timeout(monkeyp
 
     with pytest.raises(other_proof.OtherProofTimeoutError) as exc_info:
         generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig(), allow_partial=True)
-    assert "第一章生成超时" in str(exc_info.value)
+    assert "暂未生成完成" in str(exc_info.value)
 
 
 def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatch):
     plain_text = """
+一、背景与概述
 高安全性自锁紧型电源连接系统处于高可靠连接赛道，核心价值是提升复杂工况下供电连接稳定性。
 
+二、定义
+该产品定义为面向高可靠连接场景的关键部件体系，强调稳定传输与安全冗余能力。
+
+九、行业供应链
 行业需求由新能源、电力装备、轨道交通等场景共同拉动，市场关注点持续转向安全冗余和维护便利性。
 """.strip()
 
@@ -250,11 +253,11 @@ def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatc
         staticmethod(lambda _config: FakeOrchestrator()),
     )
 
-    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig(), allow_partial=True)
     assert len(result["sections"]) == 9
-    assert any("非标准 JSON" in item for item in result["warnings"])
+    assert any("非 JSON 文本" in item for item in result["warnings"])
     section_map = {item["key"]: item for item in result["sections"]}
-    assert "高安全性自锁紧型电源连接系统" in section_map["definition"]["paragraphs"][0]
+    assert "关键部件体系" in section_map["definition"]["paragraphs"][0]
     assert any("行业需求" in p for p in section_map["industry_supply_chain"]["paragraphs"])
 
 
