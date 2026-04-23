@@ -43,6 +43,21 @@ CHAPTER1_SECTION_SPECS: List[Dict[str, Any]] = [
     {"key": "industry_trends", "title": "行业发展趋势", "slot_count": 28},
     {"key": "industry_supply_chain", "title": "行业供应链", "slot_count": 18},
 ]
+CHAPTER1_BATCH_KEYS: List[List[str]] = [
+    [
+        "background_overview",
+        "definition",
+        "working_principle",
+        "product_attributes",
+        "technical_specifications",
+        "industry_history",
+    ],
+    [
+        "industry_environment",
+        "industry_trends",
+        "industry_supply_chain",
+    ],
+]
 CHAPTER1_VISIBLE_PARAGRAPH_COUNTS: Dict[str, int] = {
     "background_overview": 2,
     "definition": 2,
@@ -104,7 +119,7 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
     warnings: List[str] = []
 
     try:
-        raw_sections, raw_warning = _generate_chapter1_sections_once(
+        raw_sections, batch_warnings = _generate_chapter1_sections_in_batches(
             client=orchestrator.client,
             product_name=product,
             model=chapter1_model,
@@ -114,8 +129,7 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
     except Exception as exc:
         raise OtherProofTimeoutError(CHAPTER1_RETRY_GUIDANCE) from exc
 
-    if raw_warning:
-        warnings.append(raw_warning)
+    warnings.extend(batch_warnings)
 
     if not raw_sections:
         raise OtherProofTimeoutError(CHAPTER1_RETRY_GUIDANCE)
@@ -163,27 +177,62 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
     return {"sections": normalized, "warnings": warnings}
 
 
-def _generate_chapter1_sections_once(
+def _generate_chapter1_sections_in_batches(
     *,
     client: Any,
     product_name: str,
     model: str,
     timeout_seconds: int,
     max_output_tokens: int,
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    merged_sections: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    for batch_index, batch_keys in enumerate(CHAPTER1_BATCH_KEYS, start=1):
+        batch_sections, batch_warning = _generate_chapter1_batch(
+            client=client,
+            product_name=product_name,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            max_output_tokens=max_output_tokens,
+            batch_index=batch_index,
+            batch_keys=batch_keys,
+            generated_sections=merged_sections,
+        )
+        merged_sections.extend(batch_sections)
+        if batch_warning:
+            warnings.append(batch_warning)
+    return merged_sections, warnings
+
+
+def _generate_chapter1_batch(
+    *,
+    client: Any,
+    product_name: str,
+    model: str,
+    timeout_seconds: int,
+    max_output_tokens: int,
+    batch_index: int,
+    batch_keys: Sequence[str],
+    generated_sections: Sequence[Dict[str, Any]],
 ) -> tuple[List[Dict[str, Any]], str]:
+    batch_specs = [CHAPTER1_SPEC_MAP[key] for key in batch_keys if key in CHAPTER1_SPEC_MAP]
     messages = [
         {
             "role": "system",
             "content": (
                 "你是产业研究分析师。"
-                "当前任务是一次性生成第一章全部 9 个小节。"
+                "当前任务是分批生成第一章章节。"
                 "只输出 JSON，不要解释，不要 Markdown 代码块。"
                 "不得编造企业私有信息。"
             ),
         },
         {
             "role": "user",
-            "content": _build_chapter1_prompt(product_name),
+            "content": _build_chapter1_batch_prompt(
+                product_name=product_name,
+                batch_specs=batch_specs,
+                generated_sections=generated_sections,
+            ),
         },
     ]
     raw = client.complete(
@@ -204,14 +253,13 @@ def _generate_chapter1_sections_once(
             raise OtherProofError("第一章 JSON 缺少 sections 数组")
     except OtherProofError:
         raw_sections, warning = _coerce_chapter1_sections_from_text(raw)
-
-    aligned_sections, align_warning = _align_full_chapter1_sections(raw_sections)
+    aligned_sections, align_warning = _align_batch_chapter1_sections(raw_sections, batch_keys)
     if align_warning:
         warning = f"{warning}；{align_warning}" if warning else align_warning
     return aligned_sections, warning
 
 
-def _align_full_chapter1_sections(raw_sections: Any) -> tuple[List[Dict[str, Any]], str]:
+def _align_batch_chapter1_sections(raw_sections: Any, batch_keys: Sequence[str]) -> tuple[List[Dict[str, Any]], str]:
     if not isinstance(raw_sections, list):
         return [], ""
 
@@ -228,28 +276,39 @@ def _align_full_chapter1_sections(raw_sections: Any) -> tuple[List[Dict[str, Any
         paragraph_list = [str(text).strip() for text in paragraphs if str(text).strip()]
         if not paragraph_list:
             continue
-        if key in CHAPTER1_SPEC_MAP:
+        if key in batch_keys:
             valid_key_count += 1
         cleaned.append({"key": key, "title": title, "paragraphs": paragraph_list})
 
     if not cleaned:
         return [], ""
 
-    expected_len = len(CHAPTER1_SECTION_SPECS)
+    filtered = [item for item in cleaned if str(item.get("key") or "").strip() in batch_keys]
+    if filtered:
+        return filtered, ""
+
+    expected_len = len(batch_keys)
     if len(cleaned) < expected_len or valid_key_count >= expected_len:
-        return cleaned, ""
+        return [], ""
 
     remapped: List[Dict[str, Any]] = []
-    for idx, spec in enumerate(CHAPTER1_SECTION_SPECS):
+    for idx, key in enumerate(batch_keys):
+        if idx >= len(cleaned):
+            break
+        spec = CHAPTER1_SPEC_MAP.get(key)
+        if not spec:
+            continue
         source = cleaned[idx]
         remapped.append(
             {
-                "key": spec["key"],
+                "key": key,
                 "title": spec["title"],
                 "paragraphs": list(source["paragraphs"]),
             }
         )
-    return remapped, "第一章 sections 的 key 不完整，系统已按目录顺序重排"
+    if remapped:
+        return remapped, "第一章分批返回的 key 不完整，系统已按目录顺序重排"
+    return [], ""
 
 
 def generate_other_chapter1_section(
@@ -1687,7 +1746,7 @@ def _compress_chapter1_visual_paragraphs(root: ET.Element, field_paragraphs: Seq
         cursor += slot_count
         if not section_paragraphs:
             continue
-        if spec["key"] in {"industry_environment", "industry_trends", "industry_supply_chain"}:
+        if spec["key"] in {"industry_supply_chain"}:
             # 供应链章节模板里存在固定小节标题结构，禁止做可视压缩，避免标题与正文错位。
             continue
 
@@ -2369,6 +2428,55 @@ def _coerce_chapter1_section_paragraphs_from_text(raw_text: str) -> tuple[List[s
     if not paragraphs:
         paragraphs = [line.strip() for line in text.split("\n") if line.strip() and len(line.strip()) >= 12]
     return paragraphs, "返回了非标准 JSON，已自动解析"
+
+
+def _build_chapter1_batch_prompt(
+    *,
+    product_name: str,
+    batch_specs: Sequence[Dict[str, Any]],
+    generated_sections: Sequence[Dict[str, Any]],
+) -> str:
+    if not batch_specs:
+        raise OtherProofError("第一章分批生成配置为空")
+
+    full_outline = "\n".join(f"- {item['title']}" for item in CHAPTER1_SECTION_SPECS)
+    batch_outline = "\n".join(f"- {item['key']}（{item['title']}）" for item in batch_specs)
+    context_excerpt = _build_chapter1_context_excerpt(generated_sections, limit=6)
+    style_constraints = _chapter1_style_constraints_text()
+    min_paragraph_lines = "\n".join(
+        (
+            f"- {item['key']}（{item['title']}）："
+            f"至少 {max(2, min(6, int(item['slot_count']) // 4))} 段，每段 110-220 字，段落必须是完整陈述句。"
+        )
+        for item in batch_specs
+    )
+    strict_json = (
+        '{"sections":['
+        + ",".join(
+            f'{{"key":"{item["key"]}","title":"{item["title"]}","paragraphs":["..."]}}'
+            for item in batch_specs
+        )
+        + "]}"
+    )
+    return (
+        f"产品：{product_name}\n"
+        "你正在撰写行业研究报告第一章，当前按批次生成，目标是提高长文本稳定性并保证章节对应准确。\n"
+        "第一章完整目录（用于保持口径一致）：\n"
+        f"{full_outline}\n"
+        "本次只生成以下小节：\n"
+        f"{batch_outline}\n"
+        "已完成内容摘录（用于衔接，不要重复）：\n"
+        f"{context_excerpt}\n"
+        "输出要求：\n"
+        "1) 仅输出 JSON，不要解释，不要 Markdown。\n"
+        f"2) JSON 必须使用以下结构（key/title 必须完全一致）：{strict_json}\n"
+        "3) 不允许输出本批次之外的小节。\n"
+        f"4) 每个小节段落要求如下：\n{min_paragraph_lines}\n"
+        "5) 禁止输出短语式小标题、项目符号和清单式罗列。\n"
+        "6) 不得编造企业私有信息，不写“待补充”。\n"
+        "7) 内容必须围绕该产品本身，不允许泛行业空话。\n"
+        f"{style_constraints}"
+    )
 
 
 def _build_chapter1_section_prompt(

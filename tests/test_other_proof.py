@@ -124,7 +124,7 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
     result = generate_other_chapter1("高安全性自锁紧型电源连接系统", config, allow_partial=False)
 
     assert len(result["sections"]) == 9
-    assert len(fake_client.calls) == 1
+    assert len(fake_client.calls) == 2
     kwargs = fake_client.calls[0]["kwargs"]
     assert kwargs["timeout_seconds"] == 0
     assert kwargs["max_output_tokens"] == 5200
@@ -690,7 +690,7 @@ def test_enable_word_update_fields_on_open_sets_settings_flag():
     assert node.get(f"{{{ns}}}val") == "true"
 
 
-def test_compress_chapter1_visual_paragraphs_skips_environment_and_trends():
+def test_compress_chapter1_visual_paragraphs_compresses_environment_and_trends_only():
     ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     root = ET.fromstring(f'<w:document xmlns:w="{ns}"><w:body/></w:document>')
     body = root.find(f".//{{{ns}}}body")
@@ -707,21 +707,25 @@ def test_compress_chapter1_visual_paragraphs_skips_environment_and_trends():
 
     cursor = 20
     for spec in other_proof.CHAPTER1_SECTION_SPECS:
-        if spec["key"] in {"industry_environment", "industry_trends"}:
+        if spec["key"] in {"industry_environment", "industry_trends", "industry_supply_chain"}:
             for i in range(spec["slot_count"]):
                 other_proof._set_paragraph_text(field_paragraphs[cursor + i], f"{spec['key']}-{i}")
         cursor += spec["slot_count"]
 
-    snapshot = [ET.tostring(p, encoding="unicode") for p in field_paragraphs]
     other_proof._compress_chapter1_visual_paragraphs(root, field_paragraphs)
-    cursor = 20
-    for spec in other_proof.CHAPTER1_SECTION_SPECS:
-        if spec["key"] in {"industry_environment", "industry_trends"}:
-            for i in range(spec["slot_count"]):
-                current = ET.tostring(field_paragraphs[cursor + i], encoding="unicode")
-                before = snapshot[cursor + i]
-                assert current == before
-        cursor += spec["slot_count"]
+    body_texts = []
+    for paragraph in body.findall(f"./{{{ns}}}p"):
+        text = "".join(node.text or "" for node in paragraph.findall(f".//{{{ns}}}t")).strip()
+        if text:
+            body_texts.append(text)
+
+    env_visible = [text for text in body_texts if text.startswith("industry_environment-")]
+    trend_visible = [text for text in body_texts if text.startswith("industry_trends-")]
+    supply_visible = [text for text in body_texts if text.startswith("industry_supply_chain-")]
+
+    assert len(env_visible) <= other_proof.CHAPTER1_VISIBLE_PARAGRAPH_COUNTS["industry_environment"]
+    assert len(trend_visible) <= other_proof.CHAPTER1_VISIBLE_PARAGRAPH_COUNTS["industry_trends"]
+    assert len(supply_visible) == other_proof.CHAPTER1_SPEC_MAP["industry_supply_chain"]["slot_count"]
 
 
 def test_rewrite_other_header_titles_updates_header_company_and_product():
