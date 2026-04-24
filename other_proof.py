@@ -46,15 +46,21 @@ CHAPTER1_SECTION_SPECS: List[Dict[str, Any]] = [
 CHAPTER1_BATCH_KEYS: List[List[str]] = [
     [
         "background_overview",
+    ],
+    [
         "definition",
         "working_principle",
         "product_attributes",
         "technical_specifications",
+    ],
+    [
         "industry_history",
     ],
     [
         "industry_environment",
         "industry_trends",
+    ],
+    [
         "industry_supply_chain",
     ],
 ]
@@ -265,10 +271,13 @@ def _align_batch_chapter1_sections(raw_sections: Any, batch_keys: Sequence[str])
 
     cleaned: List[Dict[str, Any]] = []
     valid_key_count = 0
+    explicit_key_count = 0
     for item in raw_sections:
         if not isinstance(item, dict):
             continue
         key = str(item.get("key") or "").strip()
+        if key:
+            explicit_key_count += 1
         title = str(item.get("title") or "").strip()
         paragraphs = item.get("paragraphs")
         if not isinstance(paragraphs, list):
@@ -286,6 +295,10 @@ def _align_batch_chapter1_sections(raw_sections: Any, batch_keys: Sequence[str])
     filtered = [item for item in cleaned if str(item.get("key") or "").strip() in batch_keys]
     if filtered:
         return filtered, ""
+
+    # 返回里有明确 key 但全部不属于当前批次时，直接判定为错批，避免标题正文错配。
+    if explicit_key_count > 0 and valid_key_count == 0:
+        return [], "第一章分批返回的小节与当前批次不匹配，已丢弃该批内容"
 
     expected_len = len(batch_keys)
     if len(cleaned) < expected_len or valid_key_count >= expected_len:
@@ -465,6 +478,7 @@ def normalize_chapter1_sections(raw_sections: Any) -> tuple[List[Dict[str, Any]]
         if not isinstance(paragraphs, list):
             paragraphs = [paragraphs] if paragraphs else []
         cleaned = [str(x).strip() for x in paragraphs if str(x).strip()]
+        cleaned = _sanitize_chapter1_raw_paragraphs(cleaned)
         normalized_map[key] = cleaned
 
     normalized_sections: List[Dict[str, Any]] = []
@@ -492,6 +506,27 @@ def normalize_chapter1_sections(raw_sections: Any) -> tuple[List[Dict[str, Any]]
         normalized_sections.append({"key": key, "title": title, "paragraphs": paragraphs})
 
     return normalized_sections, _unique_preserve_order(warnings)
+
+
+def _sanitize_chapter1_raw_paragraphs(paragraphs: Sequence[str]) -> List[str]:
+    cleaned: List[str] = []
+    for raw in paragraphs:
+        text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not text:
+            continue
+        text = re.sub(r"\s+", " ", text)
+        text = re.sub(r'^\s*key\s*[:：]\s*[^,，]+[,，]\s*', "", text, flags=re.I)
+        text = re.sub(r'^\s*title\s+(.+?)\s+paragraphs\s*[：:]\s*', r"\1：", text, flags=re.I)
+        text = re.sub(r'^\s*title\s*[:：]\s*', "", text, flags=re.I)
+        text = re.sub(r'^\s*paragraphs\s*[:：]\s*', "", text, flags=re.I)
+        text = re.sub(r'^\s*sections?\s*[:：]\s*', "", text, flags=re.I)
+        token_probe = re.sub(r"[\s\[\]\{\}\"'_,:：\-]+", "", text).lower()
+        if token_probe in {"title", "key", "paragraphs", "sections", "section", "json"}:
+            continue
+        if not text.strip():
+            continue
+        cleaned.append(text.strip())
+    return cleaned
 
 
 
@@ -2313,6 +2348,36 @@ def _repair_empty_chapter1_sections(
 
 
 def _extract_sections_from_json_like_text(text: str) -> List[Dict[str, Any]]:
+    def _extract_balanced_array(chunk_text: str, array_start: int) -> str:
+        if array_start < 0 or array_start >= len(chunk_text) or chunk_text[array_start] != "[":
+            return ""
+        depth = 0
+        in_string = False
+        escaped = False
+        for idx in range(array_start, len(chunk_text)):
+            ch = chunk_text[idx]
+            if in_string:
+                if escaped:
+                    escaped = False
+                    continue
+                if ch == "\\":
+                    escaped = True
+                    continue
+                if ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == "[":
+                depth += 1
+                continue
+            if ch == "]":
+                depth -= 1
+                if depth == 0:
+                    return chunk_text[array_start: idx + 1]
+        return ""
+
     key_positions = list(re.finditer(r'"key"\s*:\s*"([^"]+)"', text))
     if not key_positions:
         return []
@@ -2335,15 +2400,31 @@ def _extract_sections_from_json_like_text(text: str) -> List[Dict[str, Any]]:
         paragraphs_start = re.search(r'"paragraphs"\s*:\s*\[', chunk)
         if not paragraphs_start:
             continue
-        arr_chunk = chunk[paragraphs_start.end():]
-        candidates = re.findall(r'"((?:\\.|[^"\\])*)"', arr_chunk)
+        array_start = paragraphs_start.end() - 1
+        arr_literal = _extract_balanced_array(chunk, array_start)
+        if not arr_literal:
+            continue
+
+        parsed_values: List[Any] = []
+        try:
+            candidate = json.loads(arr_literal)
+            if isinstance(candidate, list):
+                parsed_values = candidate
+        except Exception:
+            parsed_values = []
+
+        if not parsed_values:
+            candidates = re.findall(r'"((?:\\.|[^"\\])*)"', arr_literal)
+            parsed_values = []
+            for raw_value in candidates:
+                try:
+                    parsed_values.append(json.loads(f'"{raw_value}"'))
+                except Exception:
+                    parsed_values.append(raw_value)
+
         parsed_paragraphs: List[str] = []
-        for raw_value in candidates:
-            try:
-                parsed = json.loads(f'"{raw_value}"')
-            except Exception:
-                parsed = raw_value
-            text_value = str(parsed).strip()
+        for value in parsed_values:
+            text_value = str(value).strip()
             if text_value:
                 parsed_paragraphs.append(text_value)
         if parsed_paragraphs:
@@ -2443,10 +2524,20 @@ def _build_chapter1_batch_prompt(
     batch_outline = "\n".join(f"- {item['key']}（{item['title']}）" for item in batch_specs)
     context_excerpt = _build_chapter1_context_excerpt(generated_sections, limit=6)
     style_constraints = _chapter1_style_constraints_text()
+    def _min_paragraph_count(spec: Dict[str, Any]) -> int:
+        key = str(spec.get("key") or "").strip()
+        if key == "industry_supply_chain":
+            return 8
+        if key in {"industry_environment", "industry_trends"}:
+            return 5
+        if key in {"working_principle", "product_attributes"}:
+            return 4
+        return 3
+
     min_paragraph_lines = "\n".join(
         (
             f"- {item['key']}（{item['title']}）："
-            f"至少 {max(2, min(6, int(item['slot_count']) // 4))} 段，每段 110-220 字，段落必须是完整陈述句。"
+            f"至少 {_min_paragraph_count(item)} 段，每段 110-220 字，段落必须是完整陈述句。"
         )
         for item in batch_specs
     )
@@ -2475,6 +2566,8 @@ def _build_chapter1_batch_prompt(
         "5) 禁止输出短语式小标题、项目符号和清单式罗列。\n"
         "6) 不得编造企业私有信息，不写“待补充”。\n"
         "7) 内容必须围绕该产品本身，不允许泛行业空话。\n"
+        "8) 严禁输出字段名残留文字（如 key/title/paragraphs/sections），正文中不得出现这些结构词。\n"
+        "9) 若本批次包含 industry_supply_chain，必须覆盖五个子方向：上游原材料与核心零部件、中游制造与装配环节、下游应用行业与客户结构、渠道流通与交付协同、供应链风险与优化趋势。\n"
         f"{style_constraints}"
     )
 

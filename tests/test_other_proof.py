@@ -124,7 +124,7 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
     result = generate_other_chapter1("高安全性自锁紧型电源连接系统", config, allow_partial=False)
 
     assert len(result["sections"]) == 9
-    assert len(fake_client.calls) == 2
+    assert len(fake_client.calls) == 5
     kwargs = fake_client.calls[0]["kwargs"]
     assert kwargs["timeout_seconds"] == 0
     assert kwargs["max_output_tokens"] == 5200
@@ -259,6 +259,18 @@ def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatc
     section_map = {item["key"]: item for item in result["sections"]}
     assert "关键部件体系" in section_map["definition"]["paragraphs"][0]
     assert any("行业需求" in p for p in section_map["industry_supply_chain"]["paragraphs"])
+
+
+def test_extract_sections_from_json_like_text_does_not_leak_title_tokens():
+    raw = (
+        '"key":"industry_environment","title":"行业发展环境","paragraphs":["段落A"],'
+        '"key":"industry_trends","title":"行业发展趋势","paragraphs":["段落B"]'
+    )
+    sections = other_proof._extract_sections_from_json_like_text(raw)
+    env = next(item for item in sections if item["key"] == "industry_environment")
+    trends = next(item for item in sections if item["key"] == "industry_trends")
+    assert env["paragraphs"] == ["段落A"]
+    assert trends["paragraphs"] == ["段落B"]
 
 
 def test_generate_other_chapter1_section_returns_requested_section(monkeypatch):
