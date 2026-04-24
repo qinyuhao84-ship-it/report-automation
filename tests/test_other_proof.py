@@ -431,6 +431,99 @@ def test_normalize_chapter1_sections_supply_chain_remaps_body_to_matching_subtit
     assert "模块化设计" in target["paragraphs"][13]
 
 
+def test_supply_chain_batch_prompt_uses_six_complete_topic_paragraphs():
+    prompt = other_proof._build_chapter1_batch_prompt(
+        product_name="AI+XR穿戴设备",
+        batch_specs=[other_proof.CHAPTER1_SPEC_MAP["industry_supply_chain"]],
+        generated_sections=[],
+    )
+
+    assert "输出 6 段完整正文" in prompt
+    assert "第 2 段只写上游供应链" in prompt
+    assert "第 3 段只写中游制造与集成" in prompt
+    assert "第 4 段只写下游应用与分销" in prompt
+    assert "不要在正文中写（一）（二）或小标题" in prompt
+
+
+def test_remove_chapter1_when_user_skips_does_not_leave_placeholders_or_old_body():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def p(text: str) -> str:
+        return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+
+    root = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            {p("目录")}
+            {p("第一章 高安全性自锁紧型电源连接系统产品概况8")}
+            {p("一、背景与概述8")}
+            {p("五、行业供应链25")}
+            {p("第二章 主导产品市场销售规模情况31")}
+            {p("摘 要")}
+            {p("第一章 AI+XR穿戴设备产品概况")}
+            {p("一、背景与概述")}
+            {p("该部分生成失败，请人工补充。")}
+            {p("第二章 主导产品市场销售规模情况")}
+            {p("第二章正文")}
+          </w:body>
+        </w:document>
+        """
+    )
+
+    other_proof._remove_chapter1_body_and_toc(root)
+
+    texts = [_text for _text in (_get_text(p) for p in root.findall(".//w:p", {"w": ns})) if _text]
+    assert "第一章 AI+XR穿戴设备产品概况" not in texts
+    assert "第一章 高安全性自锁紧型电源连接系统产品概况8" not in texts
+    assert "该部分生成失败，请人工补充。" not in texts
+    assert "第二章 主导产品市场销售规模情况31" in texts
+    assert "第二章 主导产品市场销售规模情况" in texts
+
+
+def test_rewrite_other_toc_titles_replaces_template_product_and_company_names():
+    ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def p(text: str) -> str:
+        return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+
+    root = ET.fromstring(
+        f"""
+        <w:document xmlns:w="{ns}">
+          <w:body>
+            {p("目录")}
+            {p("第一章 高安全性自锁紧型电源连接系统产品概况8")}
+            {p("第二章 主导产品市场销售规模情况31")}
+            {p("一、全球电源连接器市场情况分析31")}
+            {p("第三章 主导产品头部企业分析34")}
+            {p("一、主导产品企业分析——旧公司34")}
+            {p("第四章 旧公司旧产品市场占有率证明37")}
+            {p("第五章 数据来源39")}
+            {p("摘 要")}
+          </w:body>
+        </w:document>
+        """
+    )
+
+    other_proof._rewrite_other_toc_titles(
+        root=root,
+        product_name="AI+XR穿戴设备",
+        chapter2_layers=[{"name": "全球AI+XR穿戴设备"}],
+        sorted_rows=[{"display_name": "深圳市亿境虚拟现实技术有限公司"}],
+        self_company_name="深圳市亿境虚拟现实技术有限公司",
+    )
+
+    texts = [_get_text(p) for p in root.findall(".//w:p", {"w": ns})]
+    assert "第一章 AI+XR穿戴设备产品概况8" in texts
+    assert "一、全球AI+XR穿戴设备市场情况分析31" in texts
+    assert "一、主导产品企业分析——深圳市亿境虚拟现实技术有限公司34" in texts
+    assert "第四章 深圳市亿境虚拟现实技术有限公司AI+XR穿戴设备市场占有率证明37" in texts
+
+
+def _get_text(paragraph: ET.Element) -> str:
+    return "".join(node.text or "" for node in paragraph.findall(".//w:t", {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}))
+
+
 def test_other_proof_body_plain_paragraph_justification_only_for_body_text():
     ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     root = ET.fromstring(

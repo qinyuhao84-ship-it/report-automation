@@ -53,7 +53,7 @@ test('第一章重新生成只能显式触发', () => {
   assert.match(html, /onclick="regenerateOtherChapter1\(\)"/);
   assert.match(html, /async function regenerateOtherChapter1\(\) \{/);
   assert.match(html, /ensureOtherChapter1\(true,\s*false\)/);
-  assert.match(html, /ensureOtherChapter1\(false,\s*skipChapter1OnFailure\)/);
+  assert.match(html, /ensureOtherChapter1\(false,\s*false\)/);
 });
 
 test('图表标题前缀自动生成，用户只填写后半句', () => {
@@ -104,8 +104,10 @@ test('他证支持第一章失败后跳过继续生成', () => {
   assert.match(html, /function abortOtherChapter1Generation\(\) \{/);
   assert.match(html, /signal: otherChapter1AbortController\.signal/);
   assert.match(html, /const skipChapter1OnFailure = document\.getElementById\("skipChapter1OnFailure"\)\?\.checked === true;/);
+  assert.match(html, /allow_partial:\s*false/);
   assert.match(html, /if \(!skipChapter1OnFailure\) return;/);
-  assert.match(html, /第一章：生成失败，已跳过并写入占位内容/);
+  assert.match(html, /第一章：生成失败，已跳过，最终 Word 不写入第一章正文/);
+  assert.match(html, /data\.skip_chapter1 = skipChapter1ForExport;/);
 });
 
 test('导出文件名：自证按公司名，他证按产品名', () => {

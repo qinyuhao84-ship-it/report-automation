@@ -87,7 +87,7 @@ SUPPLY_CHAIN_SUBTOPICS: List[str] = [
 CHAPTER1_SPEC_MAP = {item["key"]: item for item in CHAPTER1_SECTION_SPECS}
 EXPECTED_CHAPTER1_SLOT_COUNT = sum(item["slot_count"] for item in CHAPTER1_SECTION_SPECS)
 PLACEHOLDER_TEXT = "该部分生成失败，请人工补充。"
-CHAPTER1_RETRY_GUIDANCE = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。"
+CHAPTER1_RETRY_GUIDANCE = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”，系统会跳过第一章正文并继续生成后续章节。"
 AIQICHA_TIMEOUT = 20.0
 SEARCH_TIMEOUT = 20.0
 BROWSER_HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -178,7 +178,7 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
             raise OtherProofTimeoutError(
                 "第一章有部分小节内容不完整（"
                 + "、".join(strict_failed_titles)
-                + "），系统已停止写入，避免生成错乱报告。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。"
+                + "），系统已停止写入，避免生成错乱报告。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”，系统会跳过第一章正文并继续生成后续章节。"
             )
 
     return {"sections": normalized, "warnings": warnings}
@@ -626,8 +626,12 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
     rank_map = _build_year_rank_map(sorted_rows)
     layer_count = len(chapter2_layers)
     company_count = len(sorted_rows)
-    chapter1_sections, chapter1_warnings = normalize_chapter1_sections(data.get("chapter1_sections"))
-    warnings.extend(chapter1_warnings)
+    skip_chapter1 = bool(data.get("skip_chapter1"))
+    if skip_chapter1:
+        chapter1_sections = []
+    else:
+        chapter1_sections, chapter1_warnings = normalize_chapter1_sections(data.get("chapter1_sections"))
+        warnings.extend(chapter1_warnings)
 
     with zipfile.ZipFile(template_path, "r") as archive:
         xml_content = archive.read("word/document.xml")
@@ -650,6 +654,7 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
         market_name=market_name,
         chapter2_layers=chapter2_layers,
         chapter1_sections=chapter1_sections,
+        skip_chapter1=skip_chapter1,
         warnings=warnings,
     )
     field_paragraphs = _replace_highlight_fields(root, values)
@@ -669,8 +674,19 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
         warnings=warnings,
     )
     _rewrite_summary_market_research_phrase(root, str(data.get("product_name") or "").strip())
-    _normalize_chapter1_body_paragraphs_and_styles(field_paragraphs)
-    _compress_chapter1_visual_paragraphs(root, field_paragraphs)
+    _rewrite_other_toc_titles(
+        root=root,
+        product_name=str(data.get("product_name") or "").strip(),
+        chapter2_layers=chapter2_layers,
+        sorted_rows=sorted_rows,
+        self_company_name=self_row["display_name"],
+    )
+    if skip_chapter1:
+        _remove_chapter1_body_and_toc(root)
+    else:
+        _ensure_chapter1_environment_heading(root, field_paragraphs)
+        _normalize_chapter1_body_paragraphs_and_styles(field_paragraphs)
+        _compress_chapter1_visual_paragraphs(root, field_paragraphs)
     _apply_body_plain_paragraph_justification(root)
     _set_signature_block_right_alignment(root)
     _remove_section_page_number_restart(root)
@@ -950,12 +966,15 @@ def _build_other_values(
     market_name: str,
     chapter2_layers: Sequence[Dict[str, Any]],
     chapter1_sections: Sequence[Dict[str, Any]],
+    skip_chapter1: bool,
     warnings: List[str],
 ) -> List[str]:
     report_date = _report_date_from_payload(data)
-    chapter1_slots = _flatten_chapter1_slots(chapter1_sections)
+    chapter1_slots = [""] * EXPECTED_CHAPTER1_SLOT_COUNT if skip_chapter1 else _flatten_chapter1_slots(chapter1_sections)
     if len(chapter1_slots) != EXPECTED_CHAPTER1_SLOT_COUNT:
         raise OtherProofError(f"第一章段落数量异常：期望 {EXPECTED_CHAPTER1_SLOT_COUNT}，实际 {len(chapter1_slots)}")
+    if not skip_chapter1 and any(_is_chapter1_placeholder_text(item) for item in chapter1_slots):
+        raise OtherProofError("第一章仍存在未完成内容，请重新生成第一章后再导出 Word")
 
     self_rank_23 = rank_map["2023"][self_row["display_name"]]
     self_rank_24 = rank_map["2024"][self_row["display_name"]]
@@ -1465,6 +1484,88 @@ def _rewrite_chapter5_links(body: ET.Element, anchor_index: int, links: Sequence
         insert_index += 1
 
 
+def _rewrite_other_toc_titles(
+    *,
+    root: ET.Element,
+    product_name: str,
+    chapter2_layers: Sequence[Dict[str, Any]],
+    sorted_rows: Sequence[Dict[str, Any]],
+    self_company_name: str,
+) -> None:
+    toc_paragraphs = _find_toc_paragraphs(root)
+    if not toc_paragraphs:
+        return
+
+    layer_cursor = 0
+    company_cursor = 0
+    in_chapter2 = False
+    in_chapter3 = False
+    for child in toc_paragraphs:
+        text = _get_paragraph_text(child)
+        if not text:
+            continue
+        suffix = _toc_page_suffix(text)
+        bare = text[: len(text) - len(suffix)] if suffix else text
+
+        if bare.startswith("第一章 ") and "产品概况" in bare:
+            _set_paragraph_text(child, f"第一章 {product_name}产品概况{suffix}")
+            in_chapter2 = False
+            in_chapter3 = False
+            continue
+        if bare.startswith("第二章 "):
+            in_chapter2 = True
+            in_chapter3 = False
+            continue
+        if bare.startswith("第三章 "):
+            in_chapter2 = False
+            in_chapter3 = True
+            continue
+        if bare.startswith("第四章 "):
+            _set_paragraph_text(child, f"第四章 {self_company_name}{product_name}市场占有率证明{suffix}")
+            in_chapter2 = False
+            in_chapter3 = False
+            continue
+        if bare.startswith("第五章 "):
+            in_chapter2 = False
+            in_chapter3 = False
+            continue
+
+        if in_chapter2 and re.match(r"^[一二三四五六七八九十]+、", bare) and layer_cursor < len(chapter2_layers):
+            layer_name = str(chapter2_layers[layer_cursor].get("name") or "").strip()
+            if layer_name:
+                _set_paragraph_text(child, f"{_section_index_cn(layer_cursor + 1)}、{layer_name}市场情况分析{suffix}")
+                layer_cursor += 1
+            continue
+
+        if in_chapter3 and "主导产品企业分析——" in bare and company_cursor < len(sorted_rows):
+            company_name = str(sorted_rows[company_cursor].get("display_name") or "").strip()
+            if company_name:
+                _set_paragraph_text(child, f"{_section_index_cn(company_cursor + 1)}、主导产品企业分析——{company_name}{suffix}")
+                company_cursor += 1
+
+
+def _toc_page_suffix(text: str) -> str:
+    match = re.search(r"(\d+)$", str(text or "").strip())
+    return match.group(1) if match else ""
+
+
+def _find_toc_paragraphs(root: ET.Element) -> List[ET.Element]:
+    paragraphs = list(root.findall(".//w:p", NS))
+    toc_start = None
+    toc_end = None
+    for index, paragraph in enumerate(paragraphs):
+        text = _get_paragraph_text(paragraph)
+        if text == "目录":
+            toc_start = index
+            continue
+        if toc_start is not None and text == "摘 要":
+            toc_end = index
+            break
+    if toc_start is None or toc_end is None or toc_end <= toc_start:
+        return []
+    return paragraphs[toc_start + 1:toc_end]
+
+
 def _rewrite_chart9_labels(table: ET.Element, proof_scope: str) -> None:
     rows = table.findall("./w:tr", NS)
     if len(rows) < 5:
@@ -1604,6 +1705,128 @@ def _set_paragraph_text(paragraph: ET.Element, text: str) -> None:
 def _get_paragraph_text(paragraph: ET.Element) -> str:
     texts = paragraph.findall(".//w:t", NS)
     return "".join(node.text or "" for node in texts).strip()
+
+
+def _find_parent(root: ET.Element, target: ET.Element) -> ET.Element | None:
+    for parent in root.iter():
+        for child in list(parent):
+            if child is target:
+                return parent
+    return None
+
+
+def _insert_paragraph_before(root: ET.Element, target: ET.Element, paragraph: ET.Element) -> bool:
+    parent = _find_parent(root, target)
+    if parent is None:
+        return False
+    children = list(parent)
+    try:
+        index = children.index(target)
+    except ValueError:
+        return False
+    parent.insert(index, paragraph)
+    return True
+
+
+def _ensure_chapter1_environment_heading(root: ET.Element, field_paragraphs: Sequence[ET.Element]) -> None:
+    chapter1_field_start = 20
+    previous_slot_count = 0
+    for spec in CHAPTER1_SECTION_SPECS:
+        if spec["key"] == "industry_environment":
+            break
+        previous_slot_count += int(spec["slot_count"])
+    target_index = chapter1_field_start + previous_slot_count
+    if target_index >= len(field_paragraphs):
+        return
+
+    env_first_paragraph = field_paragraphs[target_index]
+    body = root.find(".//w:body", NS)
+    if body is None:
+        return
+    children = list(body)
+    try:
+        target_child_index = children.index(env_first_paragraph)
+    except ValueError:
+        return
+
+    for child in children[max(0, target_child_index - 3):target_child_index]:
+        if _get_paragraph_text(child) == "（一）行业发展环境":
+            return
+
+    source = next(
+        (child for child in children[target_child_index: target_child_index + 30] if _get_paragraph_text(child) == "（二）行业发展趋势"),
+        env_first_paragraph,
+    )
+    heading = copy.deepcopy(source)
+    _set_paragraph_text(heading, "（一）行业发展环境")
+    _insert_paragraph_before(root, env_first_paragraph, heading)
+
+
+def _remove_chapter1_body_and_toc(root: ET.Element) -> None:
+    body = root.find(".//w:body", NS)
+    if body is None:
+        return
+    _remove_direct_child_range(
+        body,
+        lambda text: text.startswith("第一章 ") and text.endswith("产品概况"),
+        lambda text: text.startswith("第二章 "),
+        prefer_last_start=True,
+    )
+    _remove_direct_child_range(
+        body,
+        lambda text: text.startswith("第一章 ") and "产品概况" in text,
+        lambda text: text.startswith("第二章 "),
+        prefer_last_start=False,
+    )
+    _remove_chapter1_toc_entries(root)
+
+
+def _remove_chapter1_toc_entries(root: ET.Element) -> None:
+    toc_paragraphs = _find_toc_paragraphs(root)
+    if not toc_paragraphs:
+        return
+    start = None
+    end = None
+    for index, paragraph in enumerate(toc_paragraphs):
+        text = _get_paragraph_text(paragraph)
+        if start is None and text.startswith("第一章 ") and "产品概况" in text:
+            start = index
+            continue
+        if start is not None and text.startswith("第二章 "):
+            end = index
+            break
+    if start is None or end is None or end <= start:
+        return
+    for paragraph in toc_paragraphs[start:end]:
+        _remove_element(root, paragraph)
+
+
+def _remove_direct_child_range(
+    body: ET.Element,
+    start_matcher: Any,
+    end_matcher: Any,
+    *,
+    prefer_last_start: bool,
+) -> None:
+    children = list(body)
+    start_candidates = [
+        index
+        for index, child in enumerate(children)
+        if child.tag == f"{{{NS['w']}}}p" and start_matcher(_get_paragraph_text(child))
+    ]
+    if not start_candidates:
+        return
+    start = start_candidates[-1] if prefer_last_start else start_candidates[0]
+    end = None
+    for index in range(start + 1, len(children)):
+        child = children[index]
+        if child.tag == f"{{{NS['w']}}}p" and end_matcher(_get_paragraph_text(child)):
+            end = index
+            break
+    if end is None or end <= start:
+        return
+    for child in children[start:end]:
+        body.remove(child)
 
 
 def _set_paragraph_alignment(paragraph: ET.Element, alignment: str) -> None:
@@ -2325,7 +2548,8 @@ def _repair_empty_chapter1_sections(
         existing_map[key] = item
         paragraphs = [str(text).strip() for text in (item.get("paragraphs") or []) if str(text).strip()]
         non_placeholder = [text for text in paragraphs if text != PLACEHOLDER_TEXT]
-        if not non_placeholder:
+        has_placeholder = any(_is_chapter1_placeholder_text(text) for text in paragraphs)
+        if not non_placeholder or has_placeholder:
             empty_specs.append(CHAPTER1_SPEC_MAP[key])
 
     if not empty_specs:
@@ -2541,6 +2765,7 @@ def _chapter1_style_constraints_text() -> str:
         "内容原则：必须围绕产品本身展开，说明产品定位、技术特征、应用场景和产业链位置，避免泛泛而谈。\n"
         "数据原则：不写具体数字、年份、金额、比例、增速、排名、市场份额，也不要写“数十毫秒”这类量化指标；需要表达程度时使用定性描述。\n"
         "表达原则：不要写“待补充”，不要编造企业私有信息，不使用夸张营销表达，段落之间要自然衔接。\n"
+        "句式原则：相邻段落开头不要重复同一种句式，不要每段都用“随着、当前、从……来看、在……方面”等套话起句。\n"
     )
 
 
@@ -2578,10 +2803,11 @@ def _build_chapter1_batch_prompt(
         key = str(spec.get("key") or "").strip()
         if key == "industry_supply_chain":
             return (
-                "输出 18 段：第 1 段为供应链总述；第 2-5 段写上游供应链，覆盖原材料、芯片、光学模组、传感器和核心零部件；"
-                "第 6-8 段写中游制造与集成，覆盖设计、制造、组装、系统集成和质量控制；"
-                "第 9-11 段写下游应用与分销，覆盖应用行业、客户结构、渠道分销和交付服务；"
-                "第 12-13 段写行业供应链的核心特征与面临的挑战；第 14-18 段写行业供应链的发展方向。"
+                "输出 6 段完整正文：第 1 段为供应链总述；第 2 段只写上游供应链，覆盖芯片、光学模组、传感器、结构件和能源部件；"
+                "第 3 段只写中游制造与集成，覆盖工业设计、软硬件协同、整机组装、测试验证和质量控制；"
+                "第 4 段只写下游应用与分销，覆盖企业级场景、消费场景、渠道交付和售后服务；"
+                "第 5 段只写行业供应链的核心特征与面临的挑战；第 6 段只写行业供应链的发展方向。"
+                "每段 180-260 字，由多句完整陈述句组成，不要在正文中写（一）（二）或小标题。"
             )
         if key in {"industry_environment", "industry_trends"}:
             return "至少 5 段，每段 110-220 字，段落必须是完整陈述句。"

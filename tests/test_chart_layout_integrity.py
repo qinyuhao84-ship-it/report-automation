@@ -61,6 +61,25 @@ def _build_self_payload(source_count: int = 2) -> dict:
     }
 
 
+def _build_complete_chapter1_sections() -> list[dict]:
+    sections = []
+    for spec in other_proof.CHAPTER1_SECTION_SPECS:
+        if spec["key"] == "industry_supply_chain":
+            paragraphs = ["行业供应链围绕核心零部件、整机集成、渠道交付和生态协同形成完整体系。"]
+            paragraphs += ["上游供应链聚焦芯片、光学模组、传感器、结构件和能源部件的稳定供给。"] * 4
+            paragraphs += ["中游制造与集成聚焦工业设计、软硬件协同、整机组装、测试验证和质量控制。"] * 3
+            paragraphs += ["下游应用与分销聚焦企业级场景、消费场景、渠道交付和售后服务。"] * 3
+            paragraphs += ["行业供应链的核心特征与面临的挑战体现在跨学科协同、质量一致性和成本控制。"] * 2
+            paragraphs += ["行业供应链的发展方向聚焦模块化设计、标准化接口、生态协同和区域化交付。"] * 5
+        else:
+            paragraphs = [
+                f"{spec['title']}正文围绕示例产品的产品定位、技术特征、应用场景和产业链位置展开，形成完整咨询报告段落。"
+                for _ in range(spec["slot_count"])
+            ]
+        sections.append({"key": spec["key"], "title": spec["title"], "paragraphs": paragraphs})
+    return sections
+
+
 def _build_other_payload_three_layers() -> dict:
     return {
         "template_type": "other",
@@ -121,13 +140,7 @@ def _build_other_payload_three_layers() -> dict:
             {"name": "高安全电源连接系统市场"},
             {"name": "高安全自锁紧型电源连接系统市场"},
         ],
-        "chapter1_sections": [
-            {
-                "key": "background_overview",
-                "title": "背景与概述",
-                "paragraphs": ["第一章示例段落"],
-            }
-        ],
+        "chapter1_sections": _build_complete_chapter1_sections(),
         "resolved_company_profiles": [
             {
                 "requested_name": "浙江达航数据技术有限公司",

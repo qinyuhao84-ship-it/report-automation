@@ -410,6 +410,7 @@ class DataModel(BaseModel):
     market_name: Optional[str] = None
     chapter2_layers: List[OtherProofLayer] = Field(default_factory=list)
     chapter1_sections: List[Chapter1Section] = Field(default_factory=list)
+    skip_chapter1: bool = False
     resolved_company_profiles: List[ResolvedCompanyProfile] = Field(default_factory=list)
 
 def generate_docx_v4(data: dict, template_path, output_path):

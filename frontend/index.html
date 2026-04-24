@@ -2143,7 +2143,7 @@
       try {
         setStatus(force ? "正在重新生成第一章..." : "正在生成第一章...");
         updateChapter1State("第一章：分 5 个部分生成中");
-        const chapter1RetryTip = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。";
+        const chapter1RetryTip = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”，系统会跳过第一章正文并继续生成后续章节。";
         chapter1AbortHappened = false;
         otherChapter1AbortController = new AbortController();
         setChapter1RunningState(true);
@@ -2155,7 +2155,7 @@
             signal: otherChapter1AbortController.signal,
             body: JSON.stringify({
               product_name: product,
-              allow_partial: allowPartial,
+              allow_partial: false,
             }),
           });
         } catch (err) {
@@ -2337,12 +2337,14 @@
 
         setStatus("正在生成第一章...");
         const skipChapter1OnFailure = document.getElementById("skipChapter1OnFailure")?.checked === true;
-        const chapter1Ready = await ensureOtherChapter1(false, skipChapter1OnFailure);
+        let skipChapter1ForExport = false;
+        const chapter1Ready = await ensureOtherChapter1(false, false);
         if (!chapter1Ready) {
           if (chapter1AbortHappened) return;
           if (!skipChapter1OnFailure) return;
           otherProofChapter1Sections = [];
-          updateChapter1State("第一章：生成失败，已跳过并写入占位内容");
+          skipChapter1ForExport = true;
+          updateChapter1State("第一章：生成失败，已跳过，最终 Word 不写入第一章正文");
           setStatus("第一章生成失败，已按设置跳过，继续后续生成");
         }
 
@@ -2356,7 +2358,8 @@
         data.proof_scope = proofScope;
         data.market_name = marketName;
         data.chapter2_layers = otherLayerPlan.layers;
-        data.chapter1_sections = otherProofChapter1Sections;
+        data.chapter1_sections = skipChapter1ForExport ? [] : otherProofChapter1Sections;
+        data.skip_chapter1 = skipChapter1ForExport;
         data.resolved_company_profiles = otherProofResolvedProfiles;
         data.sources = otherLayerPlan.sources;
       }
