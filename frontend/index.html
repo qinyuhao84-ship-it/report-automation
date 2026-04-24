@@ -2202,7 +2202,7 @@
 
       try {
         setStatus(force ? "正在重新生成第一章..." : "正在生成第一章...");
-        updateChapter1State("第一章：整章生成中（一次请求）");
+        updateChapter1State("第一章：分 5 个部分生成中");
         const chapter1RetryTip = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。";
         chapter1AbortHappened = false;
         otherChapter1AbortController = new AbortController();

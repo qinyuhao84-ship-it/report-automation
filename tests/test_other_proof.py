@@ -48,9 +48,9 @@ def test_chapter1_section_prompt_has_consulting_style_constraints():
     )
 
     assert "咨询报告/研究报告风格" in prompt
-    assert "不写任何具体统计数据" in prompt
-    assert "尽量避免使用冒号" in prompt
-    assert "围绕该产品本身" in prompt
+    assert "不写具体数字、年份、金额、比例、增速、排名、市场份额" in prompt
+    assert "数十毫秒" in prompt
+    assert "围绕产品本身" in prompt
     assert '"section"' in prompt
 
 
@@ -91,11 +91,40 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
         sections = []
         for spec in other_proof.CHAPTER1_SECTION_SPECS:
             key = spec["key"]
+            if key == "industry_supply_chain":
+                paragraphs = [
+                    "行业供应链围绕上游部件、中游集成、下游交付和长期协同形成完整体系。",
+                    *[
+                        f"上游供应链段落 {idx} 聚焦芯片、光学模组、传感器和核心零部件的稳定供应。"
+                        for idx in range(4)
+                    ],
+                    *[
+                        f"中游制造与集成段落 {idx} 聚焦设计、组装、系统集成和质量控制。"
+                        for idx in range(3)
+                    ],
+                    *[
+                        f"下游应用与分销段落 {idx} 聚焦应用行业、客户结构、渠道分销和交付服务。"
+                        for idx in range(3)
+                    ],
+                    *[
+                        f"行业供应链核心特征与挑战段落 {idx} 聚焦协同复杂度、成本压力和质量一致性。"
+                        for idx in range(2)
+                    ],
+                    *[
+                        f"行业供应链发展方向段落 {idx} 聚焦模块化设计、标准化接口和生态协同。"
+                        for idx in range(5)
+                    ],
+                ]
+            else:
+                paragraphs = [
+                    f"{key} 段落 {idx} 围绕产品定位、技术特征、应用场景和产业链位置展开，形成完整正文。"
+                    for idx in range(spec["slot_count"])
+                ]
             sections.append(
                 {
                     "key": key,
                     "title": other_proof.CHAPTER1_SPEC_MAP[key]["title"],
-                    "paragraphs": [f"{key} 段落 A", f"{key} 段落 B"],
+                    "paragraphs": paragraphs,
                 }
             )
         return json.dumps(
@@ -352,10 +381,54 @@ def test_normalize_chapter1_sections_supply_chain_always_has_five_subsections():
         ]
     )
     target = next(item for item in sections if item["key"] == "industry_supply_chain")
-    visible = [p for p in target["paragraphs"] if str(p).strip() and p != other_proof.PLACEHOLDER_TEXT][:6]
-    assert len(visible) == 6
-    assert visible[0] == "上游材料环节以铜材和工程塑料为主，供应稳定性直接影响交付周期。"
-    assert all(str(item).strip() for item in visible[1:])
+    assert target["paragraphs"][0] == "上游材料环节以铜材和工程塑料为主，供应稳定性直接影响交付周期。"
+    assert len(target["paragraphs"]) == other_proof.CHAPTER1_SPEC_MAP["industry_supply_chain"]["slot_count"]
+    assert all(paragraph == other_proof.PLACEHOLDER_TEXT for paragraph in target["paragraphs"][1:])
+
+
+def test_normalize_chapter1_sections_cleans_leading_punctuation_and_struct_tokens():
+    sections, _warnings = normalize_chapter1_sections(
+        [
+            {
+                "key": "definition",
+                "title": "定义",
+                "paragraphs": [
+                    ",“title 定义 paragraphs: 该产品是面向空间计算场景的智能穿戴终端。”",
+                    "。paragraphs：其核心价值在于把感知、显示和智能交互能力集成到可佩戴设备中。",
+                    "sections",
+                ],
+            }
+        ]
+    )
+    target = next(item for item in sections if item["key"] == "definition")
+    assert target["paragraphs"][0].startswith("定义：该产品是面向空间计算场景")
+    assert target["paragraphs"][1].startswith("其核心价值在于")
+    assert all(not paragraph.startswith(("，", ",", "。")) for paragraph in target["paragraphs"])
+
+
+def test_normalize_chapter1_sections_supply_chain_remaps_body_to_matching_subtitle():
+    sections, _warnings = normalize_chapter1_sections(
+        [
+            {
+                "key": "industry_supply_chain",
+                "title": "行业供应链",
+                "paragraphs": [
+                    "该产品供应链围绕核心零部件、整机集成和场景交付形成协同体系。",
+                    "下游应用与分销环节主要面向工业运维、医疗培训和教育模拟等客户，渠道需要承担体验、交付和售后服务。",
+                    "上游供应链依赖芯片、光学模组、传感器和轻量化结构件等关键部件，供应稳定性直接影响产品迭代。",
+                    "中游制造与集成环节需要把算法、光学、结构和操作系统进行协同设计，质量控制贯穿样机验证和量产爬坡。",
+                    "行业供应链的核心特征与面临的挑战在于跨学科协同复杂，关键零部件认证周期长，成本与一致性管理压力较高。",
+                    "行业供应链的发展方向将围绕模块化设计、标准化接口和生态协同展开，以提升交付效率和供应韧性。",
+                ],
+            }
+        ]
+    )
+    target = next(item for item in sections if item["key"] == "industry_supply_chain")
+    assert "依赖芯片" in target["paragraphs"][1]
+    assert "算法、光学" in target["paragraphs"][5]
+    assert "工业运维" in target["paragraphs"][8]
+    assert "跨学科协同复杂" in target["paragraphs"][11]
+    assert "模块化设计" in target["paragraphs"][13]
 
 
 def test_other_proof_body_plain_paragraph_justification_only_for_body_text():
@@ -594,7 +667,8 @@ def test_ensure_supply_chain_subsections_splits_combined_markers():
     ]
     result = _ensure_supply_chain_subsections(paragraphs)
 
-    assert len(result) >= 6
+    assert len(result) == 4
+    assert result[0] == other_proof.PLACEHOLDER_TEXT
     assert "（二）" not in result[1]
     assert "（三）" not in result[2]
     assert "A" in result[1]

@@ -77,11 +77,11 @@ CHAPTER1_VISIBLE_PARAGRAPH_COUNTS: Dict[str, int] = {
 }
 
 SUPPLY_CHAIN_SUBTOPICS: List[str] = [
-    "上游原材料与核心零部件",
-    "中游制造与装配环节",
-    "下游应用行业与客户结构",
-    "渠道流通与交付协同",
-    "供应链风险与优化趋势",
+    "上游供应链",
+    "中游制造与集成",
+    "下游应用与分销",
+    "行业供应链的核心特征与面临的挑战",
+    "行业供应链的发展方向",
 ]
 
 CHAPTER1_SPEC_MAP = {item["key"]: item for item in CHAPTER1_SECTION_SPECS}
@@ -171,13 +171,14 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
             section = next((item for item in normalized if str(item.get("key") or "").strip() == spec["key"]), None)
             paragraphs = section.get("paragraphs") if isinstance(section, dict) else []
             non_placeholder = [item for item in (paragraphs or []) if str(item).strip() and str(item).strip() != PLACEHOLDER_TEXT]
-            if not non_placeholder:
+            has_placeholder = any(_is_chapter1_placeholder_text(item) for item in (paragraphs or []))
+            if not non_placeholder or has_placeholder:
                 strict_failed_titles.append(spec["title"])
         if strict_failed_titles:
             raise OtherProofTimeoutError(
-                "第一章有部分小节尚未生成完成（"
+                "第一章有部分小节内容不完整（"
                 + "、".join(strict_failed_titles)
-                + "）。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。"
+                + "），系统已停止写入，避免生成错乱报告。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”。"
             )
 
     return {"sections": normalized, "warnings": warnings}
@@ -502,6 +503,7 @@ def normalize_chapter1_sections(raw_sections: Any) -> tuple[List[Dict[str, Any]]
             paragraphs, section_warnings = _fit_supply_chain_paragraphs_to_slot_count(paragraphs, title)
         else:
             paragraphs, section_warnings = _fit_paragraphs_to_slot_count(paragraphs, slot_count, title)
+        paragraphs = [_clean_chapter1_paragraph_text(paragraph) or PLACEHOLDER_TEXT for paragraph in paragraphs]
         warnings.extend(section_warnings)
         normalized_sections.append({"key": key, "title": title, "paragraphs": paragraphs})
 
@@ -520,13 +522,51 @@ def _sanitize_chapter1_raw_paragraphs(paragraphs: Sequence[str]) -> List[str]:
         text = re.sub(r'^\s*title\s*[:：]\s*', "", text, flags=re.I)
         text = re.sub(r'^\s*paragraphs\s*[:：]\s*', "", text, flags=re.I)
         text = re.sub(r'^\s*sections?\s*[:：]\s*', "", text, flags=re.I)
+        text = _clean_chapter1_paragraph_text(text)
         token_probe = re.sub(r"[\s\[\]\{\}\"'_,:：\-]+", "", text).lower()
         if token_probe in {"title", "key", "paragraphs", "sections", "section", "json"}:
+            continue
+        if _is_chapter1_instruction_placeholder(text):
             continue
         if not text.strip():
             continue
         cleaned.append(text.strip())
     return cleaned
+
+
+def _clean_chapter1_paragraph_text(text: Any) -> str:
+    cleaned = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"([。！？；])\s*[,，]\s*[\"'“”‘’]*", r"\1", cleaned)
+    cleaned = re.sub(r"^[\s,，、;；:：。.!?！？\"'“”‘’]+", "", cleaned)
+    cleaned = re.sub(r"[\s\"'“”‘’]+$", "", cleaned)
+    cleaned = re.sub(r'^\s*key\s*[:：]\s*[^,，]+[,，]\s*', "", cleaned, flags=re.I)
+    cleaned = re.sub(r'^\s*title\s+(.+?)\s+paragraphs\s*[：:]\s*', r"\1：", cleaned, flags=re.I)
+    cleaned = re.sub(r'^\s*title\s*[:：]\s*', "", cleaned, flags=re.I)
+    cleaned = re.sub(r'^\s*paragraphs\s*[:：]\s*', "", cleaned, flags=re.I)
+    cleaned = re.sub(r'^\s*sections?\s*[:：]\s*', "", cleaned, flags=re.I)
+    return cleaned.strip()
+
+
+def _is_chapter1_instruction_placeholder(text: Any) -> bool:
+    normalized = str(text or "").strip()
+    return (
+        normalized.startswith("该部分用于说明")
+        or "请结合公开行业资料补充" in normalized
+        or "待补充" in normalized
+    )
+
+
+def _is_chapter1_placeholder_text(text: Any) -> bool:
+    normalized = str(text or "").strip()
+    return (
+        not normalized
+        or normalized == PLACEHOLDER_TEXT
+        or normalized.startswith("该部分生成失败")
+        or _is_chapter1_instruction_placeholder(normalized)
+    )
 
 
 
@@ -1920,24 +1960,15 @@ def _ensure_supply_chain_subsections(paragraphs: Sequence[str]) -> List[str]:
                 continue
         unlabeled.append(text)
 
-    intro = unlabeled.pop(0) if unlabeled else ""
-    if not intro:
-        intro = (
-            "该行业供应链覆盖上游原材料与核心零部件、中游制造与装配、下游应用与渠道协同等关键环节，"
-            "各环节通过质量、交付与成本管理形成整体竞争力。"
-        )
-    result.append(intro)
+    intro = unlabeled.pop(0) if unlabeled else PLACEHOLDER_TEXT
+    result.append(_clean_chapter1_paragraph_text(intro) or PLACEHOLDER_TEXT)
 
     for idx, topic in enumerate(SUPPLY_CHAIN_SUBTOPICS, start=1):
         if idx in indexed:
             result.append(indexed[idx])
             continue
         if unlabeled:
-            result.append(_normalize_supply_chain_content(unlabeled.pop(0), topic=topic))
-        else:
-            result.append(
-                f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
-            )
+            result.append(_clean_chapter1_paragraph_text(unlabeled.pop(0)) or PLACEHOLDER_TEXT)
 
     result.extend(unlabeled)
     return result
@@ -1966,14 +1997,24 @@ def _split_supply_chain_paragraph(text: str) -> List[str]:
 
 
 def _normalize_supply_chain_content(text: str, *, topic: str) -> str:
-    normalized = str(text or "").strip()
+    normalized = _clean_chapter1_paragraph_text(text)
     if not normalized:
-        return f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
+        return PLACEHOLDER_TEXT
 
     # 去掉“（一）”“（二）”等编号，避免与模板固定小标题冲突。
     normalized = re.sub(r"^[（(][一二三四五12345][）)]\s*", "", normalized)
-    # 去掉可能重复的“上游原材料与核心零部件”等小标题。
-    normalized = re.sub(rf"^{re.escape(topic)}\s*[:：]?", "", normalized)
+    # 去掉可能重复的小标题，模板中已经有固定标题。
+    topic_aliases = [
+        topic,
+        "上游原材料与核心零部件",
+        "中游制造与装配环节",
+        "下游应用行业与客户结构",
+        "渠道流通与交付协同",
+        "供应链风险与优化趋势",
+    ]
+    for alias in topic_aliases:
+        normalized = re.sub(rf"^{re.escape(alias)}\s*[:：]?", "", normalized)
+    normalized = _clean_chapter1_paragraph_text(normalized)
 
     if "：" in normalized:
         head, body = normalized.split("：", 1)
@@ -1985,7 +2026,7 @@ def _normalize_supply_chain_content(text: str, *, topic: str) -> str:
             return f"{head}：{body.strip()}"
     if normalized.strip():
         return normalized.strip()
-    return f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
+    return PLACEHOLDER_TEXT
 
 
 def _sanitize_industry_environment_paragraphs(paragraphs: Sequence[str]) -> List[str]:
@@ -2052,7 +2093,11 @@ def _sanitize_named_topic_paragraphs(
 
 
 def _fit_topic_bucket_to_target(paragraphs: Sequence[str], target: int) -> List[str]:
-    fitted = [str(item).strip() for item in paragraphs if str(item).strip()]
+    fitted = [
+        _clean_chapter1_paragraph_text(item)
+        for item in paragraphs
+        if _clean_chapter1_paragraph_text(item) and not _is_chapter1_instruction_placeholder(item)
+    ]
     if not fitted:
         return [PLACEHOLDER_TEXT] * target
 
@@ -2073,7 +2118,11 @@ def _fit_topic_bucket_to_target(paragraphs: Sequence[str], target: int) -> List[
 
 def _fit_supply_chain_paragraphs_to_slot_count(paragraphs: Sequence[str], title: str) -> tuple[List[str], List[str]]:
     warnings: List[str] = []
-    cleaned = [str(item).strip() for item in paragraphs if str(item).strip()]
+    cleaned = [
+        _clean_chapter1_paragraph_text(item)
+        for item in paragraphs
+        if _clean_chapter1_paragraph_text(item) and not _is_chapter1_instruction_placeholder(item)
+    ]
     if not cleaned:
         return [PLACEHOLDER_TEXT] * CHAPTER1_SPEC_MAP["industry_supply_chain"]["slot_count"], [
             f"第一章《{title}》未生成成功，已写入占位内容"
@@ -2081,39 +2130,43 @@ def _fit_supply_chain_paragraphs_to_slot_count(paragraphs: Sequence[str], title:
 
     intro = cleaned[0]
     topic_buckets: List[List[str]] = [[] for _ in SUPPLY_CHAIN_SUBTOPICS]
-    for idx, topic in enumerate(SUPPLY_CHAIN_SUBTOPICS):
-        if idx + 1 < len(cleaned):
-            topic_buckets[idx].append(_normalize_supply_chain_content(cleaned[idx + 1], topic=topic))
-        else:
-            topic_buckets[idx].append(
-                f"该部分用于说明{topic}，请结合公开行业资料补充供应链结构、参与主体与协同关系。"
-            )
-    extra = cleaned[1 + len(SUPPLY_CHAIN_SUBTOPICS):]
+    body_paragraphs = cleaned[1:]
     target_per_topic = [4, 3, 3, 2, 5]
 
     def _guess_supply_chain_topic_index(text: str) -> int | None:
         normalized = str(text or "")
         rules = [
-            (0, ["上游", "原材料", "核心零部件", "器件"]),
-            (1, ["中游", "制造", "装配", "集成", "生产"]),
-            (2, ["下游", "应用", "客户", "分销", "渠道终端"]),
-            (3, ["核心特征", "挑战", "风险", "瓶颈"]),
-            (4, ["发展方向", "优化", "趋势", "未来", "转型"]),
+            (4, ["发展方向", "优化方向", "模块化", "标准化", "国产化", "生态协同"]),
+            (3, ["核心特征", "面临的挑战", "核心挑战"]),
+            (0, ["上游", "原材料", "核心零部件", "芯片", "光学模组", "传感器", "器件"]),
+            (1, ["中游", "制造", "装配", "集成", "生产", "组装", "质量控制"]),
+            (2, ["下游", "应用", "客户", "分销", "渠道", "交付", "服务"]),
+            (3, ["挑战", "风险", "瓶颈", "复杂度"]),
+            (4, ["趋势", "未来", "转型"]),
         ]
         for idx, keywords in rules:
             if any(keyword in normalized for keyword in keywords):
                 return idx
         return None
 
-    ordered_topic_idx = 0
-    for text in extra:
+    unassigned: List[str] = []
+    for text in body_paragraphs:
         guessed = _guess_supply_chain_topic_index(text)
         if guessed is None:
-            while ordered_topic_idx < len(topic_buckets) - 1 and len(topic_buckets[ordered_topic_idx]) >= target_per_topic[ordered_topic_idx]:
-                ordered_topic_idx += 1
-            guessed = ordered_topic_idx
+            unassigned.append(text)
+            continue
         topic = SUPPLY_CHAIN_SUBTOPICS[guessed]
         topic_buckets[guessed].append(_normalize_supply_chain_content(text, topic=topic))
+
+    ordered_topic_idx = 0
+    for text in unassigned:
+        while (
+            ordered_topic_idx < len(topic_buckets) - 1
+            and len(topic_buckets[ordered_topic_idx]) >= target_per_topic[ordered_topic_idx]
+        ):
+            ordered_topic_idx += 1
+        topic = SUPPLY_CHAIN_SUBTOPICS[ordered_topic_idx]
+        topic_buckets[ordered_topic_idx].append(_normalize_supply_chain_content(text, topic=topic))
 
     fitted_topics: List[List[str]] = []
     for bucket, target in zip(topic_buckets, target_per_topic):
@@ -2484,13 +2537,10 @@ def _build_chapter1_context_excerpt(generated_sections: Sequence[Dict[str, Any]]
 
 def _chapter1_style_constraints_text() -> str:
     return (
-        "写作风格约束：\n"
-        "A. 采用咨询报告/研究报告风格，语气克制、严谨、客观，不使用夸张或营销表达。\n"
-        "B. 全文使用连贯整段叙述，不写大纲式短句，不写“标题+冒号+解释”的句式。\n"
-        "C. 正文尽量避免使用冒号“：”，除非必须用于术语说明，且单段最多出现 1 次。\n"
-        "D. 不写任何具体统计数据、金额、比例、增速、年份、排名、市场份额等量化信息。\n"
-        "E. 内容必须与产品强相关，至少围绕产品定位、技术特征、应用场景、产业链位置展开。\n"
-        "F. 段落之间要有自然衔接，避免机械重复和 AI 套话（如“首先/其次/最后”的模板串联）。\n"
+        "写作原则：采用咨询报告/研究报告风格，语气克制、严谨、客观；每段都是完整正文，不写小标题、项目符号或清单。\n"
+        "内容原则：必须围绕产品本身展开，说明产品定位、技术特征、应用场景和产业链位置，避免泛泛而谈。\n"
+        "数据原则：不写具体数字、年份、金额、比例、增速、排名、市场份额，也不要写“数十毫秒”这类量化指标；需要表达程度时使用定性描述。\n"
+        "表达原则：不要写“待补充”，不要编造企业私有信息，不使用夸张营销表达，段落之间要自然衔接。\n"
     )
 
 
@@ -2524,21 +2574,23 @@ def _build_chapter1_batch_prompt(
     batch_outline = "\n".join(f"- {item['key']}（{item['title']}）" for item in batch_specs)
     context_excerpt = _build_chapter1_context_excerpt(generated_sections, limit=6)
     style_constraints = _chapter1_style_constraints_text()
-    def _min_paragraph_count(spec: Dict[str, Any]) -> int:
+    def _paragraph_requirement(spec: Dict[str, Any]) -> str:
         key = str(spec.get("key") or "").strip()
         if key == "industry_supply_chain":
-            return 8
+            return (
+                "输出 18 段：第 1 段为供应链总述；第 2-5 段写上游供应链，覆盖原材料、芯片、光学模组、传感器和核心零部件；"
+                "第 6-8 段写中游制造与集成，覆盖设计、制造、组装、系统集成和质量控制；"
+                "第 9-11 段写下游应用与分销，覆盖应用行业、客户结构、渠道分销和交付服务；"
+                "第 12-13 段写行业供应链的核心特征与面临的挑战；第 14-18 段写行业供应链的发展方向。"
+            )
         if key in {"industry_environment", "industry_trends"}:
-            return 5
+            return "至少 5 段，每段 110-220 字，段落必须是完整陈述句。"
         if key in {"working_principle", "product_attributes"}:
-            return 4
-        return 3
+            return "至少 4 段，每段 110-220 字，段落必须是完整陈述句。"
+        return "至少 3 段，每段 110-220 字，段落必须是完整陈述句。"
 
     min_paragraph_lines = "\n".join(
-        (
-            f"- {item['key']}（{item['title']}）："
-            f"至少 {_min_paragraph_count(item)} 段，每段 110-220 字，段落必须是完整陈述句。"
-        )
+        f"- {item['key']}（{item['title']}）：{_paragraph_requirement(item)}"
         for item in batch_specs
     )
     strict_json = (
@@ -2551,7 +2603,7 @@ def _build_chapter1_batch_prompt(
     )
     return (
         f"产品：{product_name}\n"
-        "你正在撰写行业研究报告第一章，当前按批次生成，目标是提高长文本稳定性并保证章节对应准确。\n"
+        "你正在撰写行业研究报告第一章。请按目录分批生成，保证标题和正文一一对应。\n"
         "第一章完整目录（用于保持口径一致）：\n"
         f"{full_outline}\n"
         "本次只生成以下小节：\n"
@@ -2563,11 +2615,7 @@ def _build_chapter1_batch_prompt(
         f"2) JSON 必须使用以下结构（key/title 必须完全一致）：{strict_json}\n"
         "3) 不允许输出本批次之外的小节。\n"
         f"4) 每个小节段落要求如下：\n{min_paragraph_lines}\n"
-        "5) 禁止输出短语式小标题、项目符号和清单式罗列。\n"
-        "6) 不得编造企业私有信息，不写“待补充”。\n"
-        "7) 内容必须围绕该产品本身，不允许泛行业空话。\n"
-        "8) 严禁输出字段名残留文字（如 key/title/paragraphs/sections），正文中不得出现这些结构词。\n"
-        "9) 若本批次包含 industry_supply_chain，必须覆盖五个子方向：上游原材料与核心零部件、中游制造与装配环节、下游应用行业与客户结构、渠道流通与交付协同、供应链风险与优化趋势。\n"
+        "5) key/title/paragraphs/sections 只能作为 JSON 字段名出现，paragraphs 正文里不得出现这些词。\n"
         f"{style_constraints}"
     )
 
@@ -2597,10 +2645,8 @@ def _build_chapter1_section_prompt(
         "1) 仅输出 JSON，不要输出解释，不要 Markdown。\n"
         f'2) JSON 格式固定为：{{"section":{{"key":"{key}","title":"{title}","paragraphs":["..."]}}}}。\n'
         f"3) paragraphs 至少 {min_paragraphs} 段，每段 110-220 字，段落必须是完整陈述句。\n"
-        "4) 禁止输出小标题短语、项目符号和清单式罗列。\n"
-        "5) 不得编造企业私有信息，不要写“待补充”。\n"
-        "6) 与已完成小节保持术语和叙述口径一致，行文必须可直接拼接。\n"
-        "7) 每个段落都要围绕该产品本身，不允许写成脱离产品的泛行业空话。\n"
+        "4) key/title/paragraphs/sections 只能作为 JSON 字段名出现，paragraphs 正文里不得出现这些词。\n"
+        "5) 与已完成小节保持术语和叙述口径一致，行文必须可直接拼接。\n"
         f"{style_constraints}"
     )
 
