@@ -45,14 +45,14 @@
     }
 
     .topbar {
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 18px;
       align-items: center;
-      gap: 12px;
       background: linear-gradient(115deg, #0f3f33 0%, #14634f 52%, #1a7b61 100%);
       color: #f7fffc;
       border-radius: 20px;
-      padding: 18px 20px;
+      padding: 16px 18px;
       box-shadow: var(--shadow);
       animation: enter 420ms ease-out;
     }
@@ -65,100 +65,31 @@
       letter-spacing: 1px;
     }
 
-    .brand p {
-      margin: 4px 0 0;
-      font-size: 13px;
-      color: #d6f5ec;
+    .top-actions {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
     }
 
-    .top-actions {
+    .top-actions-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 9px;
-      justify-content: flex-end;
+      gap: 8px;
       align-items: center;
+      justify-content: flex-end;
+    }
+
+    .top-actions-danger {
+      border-top: 1px solid rgba(213, 245, 233, 0.2);
+      padding-top: 8px;
     }
 
     .layout {
       margin-top: 14px;
-      display: grid;
-      grid-template-columns: 214px minmax(0, 1fr);
-      gap: 12px;
     }
 
     .layout > * { min-width: 0; }
     main { min-width: 0; }
-
-    .guide {
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      padding: 12px;
-      box-shadow: 0 4px 16px rgba(17, 50, 41, 0.05);
-      height: fit-content;
-      position: sticky;
-      top: 12px;
-    }
-
-    .guide h2 {
-      margin: 0 0 12px;
-      font-size: 17px;
-      font-weight: 700;
-    }
-
-    .compass {
-      background: linear-gradient(145deg, #edf8f3, #f9fdfb);
-      border: 1px solid #d7e8e1;
-      border-radius: 12px;
-      padding: 10px;
-      margin-bottom: 12px;
-    }
-
-    .compass-label {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 6px;
-      font-size: 12px;
-      color: #3c5f53;
-    }
-
-    .progress-track {
-      width: 100%;
-      height: 8px;
-      border-radius: 999px;
-      background: #d9e9e3;
-      overflow: hidden;
-    }
-
-    .progress-bar {
-      height: 100%;
-      width: 0;
-      background: linear-gradient(90deg, #128063, #15a17d);
-      transition: width 240ms ease;
-    }
-
-    .step-list {
-      display: grid;
-      gap: 8px;
-    }
-
-    .step-item {
-      border: 1px solid #d8e5df;
-      border-radius: 10px;
-      padding: 10px;
-      background: #fff;
-      font-size: 13px;
-    }
-
-    .step-item strong {
-      display: block;
-      margin-bottom: 2px;
-      color: #24483d;
-    }
-
-    .step-item small {
-      color: var(--muted);
-    }
 
     .panel {
       background: var(--paper);
@@ -326,39 +257,40 @@
     .btn:focus-visible { outline: 2px solid #cdeee2; outline-offset: 2px; }
 
     .top-btn {
-      min-height: 34px;
+      min-height: 36px;
       white-space: nowrap;
-      border-radius: 9px;
+      border-radius: 10px;
       font-weight: 700;
       letter-spacing: 0.1px;
+      padding: 8px 14px;
     }
 
     .top-save {
-      background: linear-gradient(138deg, #e7fff6 0%, #b8f4df 100%);
-      color: #0a4f3f;
-      border: 1px solid #77c7ab;
-      box-shadow: 0 4px 12px rgba(6, 84, 64, 0.2);
+      background: #f2fff9;
+      color: #0c5b47;
+      border: 1px solid #9fd9c4;
+      box-shadow: 0 2px 6px rgba(6, 84, 64, 0.18);
     }
 
     .top-save:hover {
-      filter: brightness(1.02);
+      filter: brightness(1.01);
     }
 
     .top-create {
-      background: rgba(255, 255, 255, 0.22);
-      color: #f4fff9;
-      border: 1px solid rgba(210, 244, 232, 0.5);
+      background: rgba(255, 255, 255, 0.14);
+      color: #effff8;
+      border: 1px solid rgba(210, 244, 232, 0.42);
     }
 
     .top-delete-one {
-      background: rgba(255, 214, 214, 0.2);
-      color: #ffe2e2;
-      border: 1px solid rgba(255, 208, 208, 0.48);
+      background: rgba(255, 214, 214, 0.18);
+      color: #ffe7e7;
+      border: 1px solid rgba(255, 208, 208, 0.42);
     }
 
     .top-delete-all {
-      background: #8f2b2b;
-      border: 1px solid #b94a4a;
+      background: #a03838;
+      border: 1px solid #c55a5a;
     }
 
     .btn.inference-cta {
@@ -395,23 +327,26 @@
       border: 1px solid #d7e5df;
       border-left: 4px solid var(--brand);
       border-radius: 10px;
-      padding: 10px;
+      padding: 10px 12px;
       margin-top: 8px;
       background: #fff;
       position: relative;
     }
 
-    .source-del {
+    .source-del-layer {
       position: absolute;
       top: 6px;
       right: 6px;
-      width: 24px;
-      height: 24px;
-      border: 0;
-      border-radius: 8px;
-      background: #fff0eb;
-      color: #b64a2d;
+      min-width: 40px;
+      height: 28px;
+      border: 1px solid #e7b7a8;
+      border-radius: 999px;
+      background: #fff3ef;
+      color: #a8462c;
       cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 0 10px;
     }
 
     .source-field-head {
@@ -462,13 +397,26 @@
       width: 24px;
       height: 24px;
       border: 1px solid #f1d4c8;
-      border-radius: 8px;
+      border-radius: 6px;
       background: #fff3ee;
       color: #b64a2d;
       cursor: pointer;
       flex: 0 0 auto;
       line-height: 1;
+      font-size: 14px;
+    }
+
+    .source-row-remove {
+      width: 28px;
+      height: 28px;
+      border: 1px solid #e7b7a8;
+      border-radius: 8px;
+      background: #fff3ef;
+      color: #a8462c;
+      cursor: pointer;
+      line-height: 1;
       font-size: 16px;
+      flex: 0 0 auto;
     }
 
     .chart-title-editor {
@@ -588,16 +536,15 @@
       position: sticky;
       bottom: 10px;
       z-index: 5;
-      background: rgba(255, 255, 255, 0.96);
-      backdrop-filter: blur(6px);
+      background: #ffffff;
       border: 1px solid #d7e4df;
       border-radius: 14px;
       box-shadow: var(--shadow);
-      padding: 12px;
-      display: flex;
-      justify-content: space-between;
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       margin-top: 14px;
     }
 
@@ -637,6 +584,15 @@
       box-shadow: 0 0 0 3px rgba(15, 126, 100, 0.13);
     }
 
+    .dock .buttons {
+      margin: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
     .skip-ch1-option {
       display: inline-flex;
       align-items: center;
@@ -666,8 +622,9 @@
       font-size: 12px;
       color: #cdeee3;
       opacity: 0.95;
-      text-align: right;
+      text-align: left;
       min-width: 170px;
+      padding-left: 4px;
     }
 
     .draft-version {
@@ -677,10 +634,12 @@
       color: #d6f5ec;
       font-size: 12px;
       flex-wrap: wrap;
-      padding: 4px 8px;
+      padding: 6px 10px;
       border: 1px solid rgba(205, 242, 229, 0.38);
       border-radius: 10px;
       background: rgba(255, 255, 255, 0.08);
+      min-width: 340px;
+      justify-content: flex-start;
     }
 
     .draft-version select,
@@ -692,7 +651,7 @@
       padding: 6px 8px;
       font-size: 12px;
       outline: none;
-      min-width: 96px;
+      min-width: 110px;
     }
 
     .draft-version input::placeholder {
@@ -721,18 +680,19 @@
     }
 
     @media (max-width: 1060px) {
-      .layout { grid-template-columns: 1fr; }
-      .guide { position: static; }
       .inference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 720px) {
-      .topbar { flex-direction: column; align-items: flex-start; }
-      .top-actions { width: 100%; justify-content: flex-start; }
+      .topbar { grid-template-columns: 1fr; }
+      .top-actions { width: 100%; }
+      .top-actions-row { justify-content: flex-start; }
       .top-btn { flex: 1 1 calc(50% - 8px); min-width: 130px; }
+      .draft-version { min-width: 0; width: 100%; }
+      .draft-tip { min-width: 0; width: 100%; }
       .grid-2, .grid-3 { grid-template-columns: 1fr; }
       .inference-grid { grid-template-columns: 1fr; }
-      .dock { flex-direction: column; align-items: stretch; }
+      .dock { grid-template-columns: 1fr; align-items: stretch; }
       .dock .buttons { width: 100%; }
       .dock .btn { width: 100%; }
       .dock .template-mode { width: 100%; }
@@ -745,47 +705,35 @@
     <header class="topbar">
       <div class="brand">
         <h1>报告自动化助手</h1>
-        <p>聚焦模板填报与一键生成 Word，推理流程已移除。</p>
       </div>
       <div class="top-actions" id="topActionsBar">
-        <button id="createCompanyBtnTop" class="btn subtle top-btn top-create" type="button" onclick="onCreateCompanyClick()">新建企业</button>
-        <div class="draft-version">
-          <label for="draftCompanySelect">企业</label>
-          <select id="draftCompanySelect" onchange="onDraftCompanyChange()"></select>
-          <label for="draftVersionSelect">版本</label>
-          <select id="draftVersionSelect" onchange="onDraftVersionChange()"></select>
+        <div class="top-actions-row">
+          <button id="createCompanyBtnTop" class="btn subtle top-btn top-create" type="button" onclick="onCreateCompanyClick()">新建企业</button>
+          <div class="draft-version">
+            <label for="draftCompanySelect">企业</label>
+            <select id="draftCompanySelect" onchange="onDraftCompanyChange()"></select>
+            <label for="draftVersionSelect">版本</label>
+            <select id="draftVersionSelect" onchange="onDraftVersionChange()"></select>
+          </div>
+          <button id="createVersionBtnTop" class="btn subtle top-btn top-create" type="button" onclick="onCreateVersionClick()">新建版本</button>
+          <button id="saveDraftBtnTop" class="btn primary top-btn top-save" type="button" onclick="onSaveDraftClick()">保存版本</button>
         </div>
-        <button id="createVersionBtnTop" class="btn subtle top-btn top-create" type="button" onclick="onCreateVersionClick()">新建版本</button>
-        <button id="saveDraftBtnTop" class="btn primary top-btn top-save" type="button" onclick="onSaveDraftClick()">保存版本</button>
-        <button id="deleteVersionBtnTop" class="btn subtle top-btn top-delete-one" type="button" onclick="onDeleteVersionClick()">删除当前版本</button>
-        <button id="deleteCompanyBtnTop" class="btn danger top-btn top-delete-all" type="button" onclick="onDeleteCompanyClick()">删除企业</button>
-        <div id="draftMeta" class="draft-tip">草稿未保存</div>
+        <div class="top-actions-row top-actions-danger">
+          <button id="deleteVersionBtnTop" class="btn subtle top-btn top-delete-one" type="button" onclick="onDeleteVersionClick()">删除当前版本</button>
+          <button id="deleteCompanyBtnTop" class="btn danger top-btn top-delete-all" type="button" onclick="onDeleteCompanyClick()">删除企业</button>
+          <div id="draftMeta" class="draft-tip">草稿未保存</div>
+        </div>
       </div>
     </header>
 
     <div class="layout">
-      <aside class="guide">
-        <h2>操作导航</h2>
-        <div class="compass">
-          <div class="compass-label"><span>完成度</span><span id="progressText">0%</span></div>
-          <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
-        </div>
-        <div class="step-list">
-          <div class="step-item"><strong>1. 基础资料</strong><small>企业信息、产品信息、市场范围</small></div>
-          <div class="step-item"><strong>2. 经营数据</strong><small>三年销售额和市场规模</small></div>
-          <div class="step-item"><strong>3. 模板资料</strong><small>竞争对手与分层来源</small></div>
-          <div class="step-item"><strong>4. 生成文档</strong><small>输出最终 Word</small></div>
-        </div>
-      </aside>
-
       <main>
         <section class="panel" id="step1">
           <div class="panel-head">
             <h3>基础资料</h3>
-            <span class="badge must">必填</span>
           </div>
           <div class="grid-2">
-            <div class="field"><label>省份（可不填）</label><input id="province" /></div>
+            <input id="province" type="hidden" />
             <div class="field"><label>企业名称</label><input id="company_name" /></div>
             <div class="field"><label>主导产品名称</label><input id="product_name" /></div>
             <div class="field"><label>产品代码</label><input id="product_code" /></div>
@@ -805,10 +753,6 @@
                 <option value="GLOBAL">全球市场</option>
               </select>
             </div>
-            <div class="field">
-              <label>产品类别（系统自动推断）</label>
-              <input value="系统根据企业与产品介绍自动推断，无需填写" readonly />
-            </div>
           </div>
 
           <div class="grid-2" style="margin-top:10px;">
@@ -821,15 +765,12 @@
               <textarea id="product_intro" placeholder="写主导产品定位、技术方案、性能优势与应用场景"></textarea>
             </div>
           </div>
-          <div class="section-note">用于模板生成的基础信息，请按实际情况填写。</div>
         </section>
 
         <section class="panel" id="step2">
           <div class="panel-head">
             <h3>经营数据</h3>
-            <span class="badge must">必填</span>
           </div>
-          <div class="warn-box">市场规模默认映射自“数据来源（分层）”最底层，并按“亿元→万元”自动换算（×10000）；你也可以手动填写，若与来源冲突则以最新来源为准；市场占有率按“销售额 / 市场规模”自动计算。</div>
           <table>
             <thead>
               <tr>
@@ -869,7 +810,6 @@
         <section class="panel" id="step4">
           <div class="panel-head">
             <h3>竞争对手信息</h3>
-            <span class="badge opt">选填</span>
           </div>
           <div class="buttons" style="margin-top:0;">
             <button class="btn subtle" type="button" onclick="addCompetitorRow()">添加一行企业</button>
@@ -890,8 +830,7 @@
 
         <section class="panel" id="step5">
           <div class="panel-head">
-            <h3>数据来源（分层）</h3>
-            <span class="badge opt">自证 / 他证共用</span>
+            <h3>数据来源</h3>
           </div>
 
           <div class="buttons" style="margin-top:0;">
@@ -941,7 +880,7 @@
 
         <section class="dock">
           <div id="status" class="dock-status">状态：等待操作</div>
-          <div class="buttons" style="margin:0;">
+          <div class="buttons">
             <div class="template-mode">
               <label for="template_type">模板类型</label>
               <select id="template_type">
@@ -1652,8 +1591,10 @@
         if (val) filled += 1;
       });
       const percent = Math.round((filled / required.length) * 100);
-      document.getElementById("progressBar").style.width = percent + "%";
-      document.getElementById("progressText").textContent = percent + "%";
+      const progressBar = document.getElementById("progressBar");
+      if (progressBar) progressBar.style.width = percent + "%";
+      const progressText = document.getElementById("progressText");
+      if (progressText) progressText.textContent = percent + "%";
     }
 
     function refreshSourceLabels() {
@@ -1682,7 +1623,7 @@
         <td>
           <div style="display:flex;gap:6px;align-items:center;">
             <input class="c-name" value="${prefill?.name || ""}">
-            <button class="source-del" type="button" style="position:static;flex:0 0 auto;" onclick="removeCompetitorRow(this)">×</button>
+            <button class="source-row-remove" type="button" style="position:static;" onclick="removeCompetitorRow(this)">×</button>
           </div>
         </td>
         <td><input class="c-s23" value="${prefill?.sale_23 || prefill?.s23 || ""}" oninput="competitorInputChanged(this, '23', 'sale')" /></td>
@@ -1722,7 +1663,7 @@
       const card = document.createElement("div");
       card.className = "source-card";
       card.innerHTML = `
-        <button class="source-del" type="button" onclick="removeOtherLayer(this)">×</button>
+        <button class="source-del-layer" type="button" onclick="removeOtherLayer(this)">删层</button>
         <div class="source-layer-label" style="font-size:12px;color:#4e6f64;margin-bottom:6px;">第 1 层市场</div>
         <div class="field"><label>市场名称</label><input class="other-layer-name" value="${prefill?.name || ""}" /></div>
         <div class="section-note other-layer-sync-note">这一层正文和链接自动复用第 1 层来源。</div>
@@ -1804,7 +1745,7 @@
       const card = document.createElement("div");
       card.className = "source-card";
       card.innerHTML = `
-        <button class="source-del" type="button" onclick="removeSourceCard(this)">×</button>
+        <button class="source-del-layer" type="button" onclick="removeSourceCard(this)">删层</button>
         <div class="source-layer-label" style="font-size:12px;color:#4e6f64;margin-bottom:6px;">第 1 层来源</div>
         <div class="field">
           <div class="source-field-head">
@@ -1826,7 +1767,6 @@
             <span class="chart-prefix">图表1：</span>
             <input class="s-chart-suffix" placeholder="只填写标题后半句，例如：2023-2025年市场规模" />
           </div>
-          <div class="mini-hint">“图表N：”会随顺序自动更新，你只需要填写后半句。</div>
         </div>
         <div class="grid-3">
           <div class="field"><label>2023年市场规模（亿元）</label><input class="s-c23" placeholder="例如：444.48" /></div>
