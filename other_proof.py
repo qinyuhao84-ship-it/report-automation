@@ -166,14 +166,32 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
         ]
     warnings.extend(repair_warnings)
     if not allow_partial:
+        normalized, individual_repair_warnings, individual_repaired_keys = _repair_incomplete_chapter1_sections_individually(
+            client=orchestrator.client,
+            model=chapter1_model,
+            product_name=product,
+            sections=normalized,
+            timeout_seconds=chapter1_timeout_seconds,
+            max_output_tokens=chapter1_max_output_tokens,
+        )
+        if individual_repaired_keys:
+            repaired_titles = {
+                CHAPTER1_SPEC_MAP[key]["title"]
+                for key in individual_repaired_keys
+                if key in CHAPTER1_SPEC_MAP
+            }
+            warnings = [
+                item
+                for item in warnings
+                if not (
+                    any(f"第一章《{title}》" in item for title in repaired_titles)
+                    and ("未生成成功" in item or "段落不足" in item or "占位" in item or "补全未成功" in item)
+                )
+            ]
+        warnings.extend(individual_repair_warnings)
         strict_failed_titles = []
-        for spec in CHAPTER1_SECTION_SPECS:
-            section = next((item for item in normalized if str(item.get("key") or "").strip() == spec["key"]), None)
-            paragraphs = section.get("paragraphs") if isinstance(section, dict) else []
-            non_placeholder = [item for item in (paragraphs or []) if str(item).strip() and str(item).strip() != PLACEHOLDER_TEXT]
-            has_placeholder = any(_is_chapter1_placeholder_text(item) for item in (paragraphs or []))
-            if not non_placeholder or has_placeholder:
-                strict_failed_titles.append(spec["title"])
+        for spec in _find_incomplete_chapter1_specs(normalized):
+            strict_failed_titles.append(spec["title"])
         if strict_failed_titles:
             raise OtherProofTimeoutError(
                 "第一章有部分小节内容不完整（"
@@ -567,6 +585,31 @@ def _is_chapter1_placeholder_text(text: Any) -> bool:
         or normalized.startswith("该部分生成失败")
         or _is_chapter1_instruction_placeholder(normalized)
     )
+
+
+def _chapter1_section_is_complete(section: Any, spec: Dict[str, Any]) -> bool:
+    if not isinstance(section, dict):
+        return False
+    if str(section.get("key") or "").strip() != str(spec.get("key") or "").strip():
+        return False
+    paragraphs = [str(item).strip() for item in (section.get("paragraphs") or []) if str(item).strip()]
+    if len(paragraphs) < int(spec.get("slot_count") or 0):
+        return False
+    return not any(_is_chapter1_placeholder_text(item) for item in paragraphs)
+
+
+def _find_incomplete_chapter1_specs(sections: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    section_map = {
+        str(item.get("key") or "").strip(): item
+        for item in sections
+        if isinstance(item, dict)
+    }
+    incomplete: List[Dict[str, Any]] = []
+    for spec in CHAPTER1_SECTION_SPECS:
+        section = section_map.get(str(spec["key"]))
+        if not _chapter1_section_is_complete(section, spec):
+            incomplete.append(spec)
+    return incomplete
 
 
 
@@ -2362,8 +2405,9 @@ def _fit_supply_chain_paragraphs_to_slot_count(paragraphs: Sequence[str], title:
             (4, ["发展方向", "优化方向", "模块化", "标准化", "国产化", "生态协同"]),
             (3, ["核心特征", "面临的挑战", "核心挑战"]),
             (0, ["上游", "原材料", "核心零部件", "芯片", "光学模组", "传感器", "器件"]),
-            (1, ["中游", "制造", "装配", "集成", "生产", "组装", "质量控制"]),
-            (2, ["下游", "应用", "客户", "分销", "渠道", "交付", "服务"]),
+            (2, ["下游", "分销", "渠道", "售后服务", "客户结构"]),
+            (1, ["中游", "制造与集成", "制造", "装配", "整机组装", "生产", "组装", "质量控制"]),
+            (2, ["应用场景", "企业级场景", "消费场景", "渠道交付", "交付服务"]),
             (3, ["挑战", "风险", "瓶颈", "复杂度"]),
             (4, ["趋势", "未来", "转型"]),
         ]
@@ -2371,6 +2415,20 @@ def _fit_supply_chain_paragraphs_to_slot_count(paragraphs: Sequence[str], title:
             if any(keyword in normalized for keyword in keywords):
                 return idx
         return None
+
+    if len(body_paragraphs) == len(SUPPLY_CHAIN_SUBTOPICS):
+        guessed_order = [_guess_supply_chain_topic_index(text) for text in body_paragraphs]
+        if all(item is None for item in guessed_order) or guessed_order == list(range(len(SUPPLY_CHAIN_SUBTOPICS))):
+            for idx, text in enumerate(body_paragraphs):
+                topic_buckets[idx].append(_normalize_supply_chain_content(text, topic=SUPPLY_CHAIN_SUBTOPICS[idx]))
+            fitted_topics = [
+                _fit_topic_bucket_to_target(bucket, target)
+                for bucket, target in zip(topic_buckets, target_per_topic)
+            ]
+            result = [intro]
+            for bucket in fitted_topics:
+                result.extend(bucket)
+            return result, warnings
 
     unassigned: List[str] = []
     for text in body_paragraphs:
@@ -2420,8 +2478,10 @@ def _split_paragraph_for_template(text: str) -> tuple[str, str]:
         for idx, sentence in enumerate(sentences, start=1):
             current += len(sentence)
             split_at = idx
-            if current >= total / 2:
+            if idx < len(sentences) and current >= total / 2:
                 break
+        if split_at >= len(sentences):
+            split_at = max(1, len(sentences) // 2)
         left = "".join(sentences[:split_at]).strip()
         right = "".join(sentences[split_at:]).strip()
         if left and right:
@@ -2624,6 +2684,74 @@ def _repair_empty_chapter1_sections(
     return merged_sections, warnings, replaced_keys
 
 
+def _repair_incomplete_chapter1_sections_individually(
+    *,
+    client: Any,
+    model: str,
+    product_name: str,
+    sections: Sequence[Dict[str, Any]],
+    timeout_seconds: int,
+    max_output_tokens: int,
+) -> tuple[List[Dict[str, Any]], List[str], List[str]]:
+    section_map: Dict[str, Dict[str, Any]] = {
+        str(item.get("key") or "").strip(): dict(item)
+        for item in sections
+        if isinstance(item, dict) and str(item.get("key") or "").strip() in CHAPTER1_SPEC_MAP
+    }
+    incomplete_specs = _find_incomplete_chapter1_specs(list(section_map.values()))
+    if not incomplete_specs:
+        return list(sections), [], []
+
+    warnings: List[str] = []
+    repaired_keys: List[str] = []
+    for spec in incomplete_specs:
+        key = str(spec["key"])
+        try:
+            section_raw, section_warning = _generate_chapter1_section(
+                client=client,
+                product_name=product_name,
+                spec=spec,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                max_output_tokens=max(1800, min(max_output_tokens, 5000)),
+                generated_sections=[
+                    item
+                    for item in section_map.values()
+                    if isinstance(item, dict) and str(item.get("key") or "").strip() != key
+                ],
+            )
+        except Exception:
+            warnings.append(f"第一章《{spec['title']}》单独补写未成功")
+            continue
+
+        normalized_section_list, _ = normalize_chapter1_sections([section_raw])
+        repaired = next(
+            (
+                item
+                for item in normalized_section_list
+                if isinstance(item, dict) and str(item.get("key") or "").strip() == key
+            ),
+            None,
+        )
+        if not _chapter1_section_is_complete(repaired, spec):
+            warnings.append(f"第一章《{spec['title']}》单独补写后仍不完整")
+            continue
+        section_map[key] = repaired
+        repaired_keys.append(key)
+        if section_warning:
+            warnings.append(f"第一章《{spec['title']}》{section_warning}")
+
+    merged_sections = [
+        section_map[spec["key"]]
+        for spec in CHAPTER1_SECTION_SPECS
+        if spec["key"] in section_map
+    ]
+    if repaired_keys:
+        repaired_titles = [CHAPTER1_SPEC_MAP[key]["title"] for key in repaired_keys if key in CHAPTER1_SPEC_MAP]
+        warnings.insert(0, "第一章已逐节补全：" + "、".join(repaired_titles))
+    return merged_sections, _unique_preserve_order(warnings), repaired_keys
+
+
 def _extract_sections_from_json_like_text(text: str) -> List[Dict[str, Any]]:
     def _extract_balanced_array(chunk_text: str, array_start: int) -> str:
         if array_start < 0 or array_start >= len(chunk_text) or chunk_text[array_start] != "[":
@@ -2765,7 +2893,7 @@ def _chapter1_style_constraints_text() -> str:
         "内容原则：必须围绕产品本身展开，说明产品定位、技术特征、应用场景和产业链位置，避免泛泛而谈。\n"
         "数据原则：不写具体数字、年份、金额、比例、增速、排名、市场份额，也不要写“数十毫秒”这类量化指标；需要表达程度时使用定性描述。\n"
         "表达原则：不要写“待补充”，不要编造企业私有信息，不使用夸张营销表达，段落之间要自然衔接。\n"
-        "句式原则：相邻段落开头不要重复同一种句式，不要每段都用“随着、当前、从……来看、在……方面”等套话起句。\n"
+        "句式原则：相邻段落开头不要重复同一种句式，不要每段都用“随着、当前、从……来看、在……方面、本产品、该产品”等套话起句。\n"
     )
 
 

@@ -915,15 +915,15 @@
     let otherChapter1AbortController = null;
     let chapter1AbortHappened = false;
     const CHAPTER1_SECTION_SPECS = [
-      { key: "background_overview", title: "背景与概述" },
-      { key: "definition", title: "定义" },
-      { key: "working_principle", title: "工作原理" },
-      { key: "product_attributes", title: "产品属性" },
-      { key: "technical_specifications", title: "技术规范" },
-      { key: "industry_history", title: "行业发展历程" },
-      { key: "industry_environment", title: "行业发展环境" },
-      { key: "industry_trends", title: "行业发展趋势" },
-      { key: "industry_supply_chain", title: "行业供应链" },
+      { key: "background_overview", title: "背景与概述", slot_count: 3 },
+      { key: "definition", title: "定义", slot_count: 4 },
+      { key: "working_principle", title: "工作原理", slot_count: 6 },
+      { key: "product_attributes", title: "产品属性", slot_count: 6 },
+      { key: "technical_specifications", title: "技术规范", slot_count: 4 },
+      { key: "industry_history", title: "行业发展历程", slot_count: 5 },
+      { key: "industry_environment", title: "行业发展环境", slot_count: 28 },
+      { key: "industry_trends", title: "行业发展趋势", slot_count: 28 },
+      { key: "industry_supply_chain", title: "行业供应链", slot_count: 18 },
     ];
     const CHAPTER1_PLACEHOLDER_TEXT = "该部分生成失败，请人工补充。";
 
@@ -962,19 +962,20 @@
 
     function chapter1SectionsContainPlaceholder(sections) {
       if (!Array.isArray(sections) || sections.length !== CHAPTER1_SECTION_SPECS.length) return true;
-      const expectedKeys = new Set(CHAPTER1_SECTION_SPECS.map((item) => item.key));
       const seenKeys = new Set();
       for (const section of sections) {
         if (!section || typeof section !== "object") return true;
         const key = String(section.key || "").trim();
-        if (!expectedKeys.has(key) || seenKeys.has(key)) return true;
+        const spec = CHAPTER1_SECTION_SPECS.find((item) => item.key === key);
+        if (!spec || seenKeys.has(key)) return true;
         seenKeys.add(key);
         const paragraphs = Array.isArray(section.paragraphs) ? section.paragraphs : [];
-        const hasNonPlaceholder = paragraphs.some((item) => {
+        if (paragraphs.length < spec.slot_count) return true;
+        for (const item of paragraphs) {
           const text = String(item || "").trim();
-          return !!text && text !== CHAPTER1_PLACEHOLDER_TEXT;
-        });
-        if (!hasNonPlaceholder) return true;
+          if (!text || text === CHAPTER1_PLACEHOLDER_TEXT || text.startsWith("该部分生成失败")) return true;
+          if (text.includes("待补充") || text.includes("请结合公开行业资料补充")) return true;
+        }
       }
       return false;
     }
@@ -2191,13 +2192,15 @@
         const hasPlaceholderSection = chapter1SectionsContainPlaceholder(otherProofChapter1Sections);
         if (hasPlaceholderSection) {
           clearOtherChapter1Cache(companyName);
+          otherProofChapter1Sections = [];
+          updateChapter1State("第一章：生成失败");
+          setStatus(chapter1RetryTip, "error");
+          return false;
         } else {
           setOtherChapter1Cache(companyName, otherProofChapter1Sections, product);
         }
         saveDraft(true);
-        if (hasPlaceholderSection) {
-          updateChapter1State(`第一章：已生成 ${otherProofChapter1Sections.length} 个小节，但存在占位内容（未缓存）`);
-        } else if (warnings.length) {
+        if (warnings.length) {
           updateChapter1State(`第一章：已生成并缓存 ${otherProofChapter1Sections.length} 个小节，部分内容需人工补充`);
         } else {
           updateChapter1State(`第一章：已生成并缓存 ${otherProofChapter1Sections.length} 个小节`);

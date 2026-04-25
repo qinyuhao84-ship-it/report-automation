@@ -37,6 +37,9 @@ test('按钮交互增强：状态机、防连点、快捷键', () => {
 test('第一章按企业缓存：跨版本复用，不写入版本快照', () => {
   assert.match(html, /const OTHER_CHAPTER1_CACHE_KEY = "report_other_chapter1_by_company_v1"/);
   assert.match(html, /function chapter1SectionsContainPlaceholder\(sections\) \{/);
+  assert.match(html, /slot_count:\s*18/);
+  assert.match(html, /if \(paragraphs\.length < spec\.slot_count\) return true;/);
+  assert.match(html, /text\.startsWith\("该部分生成失败"\)/);
   assert.match(html, /function isReusableOtherChapter1CacheEntry\(entry, productName = ""\) \{/);
   assert.match(html, /function getOtherChapter1Cache\(companyName, productName = ""\) \{/);
   assert.match(html, /if \(!isReusableOtherChapter1CacheEntry\(entry, productName\)\) \{/);
@@ -45,6 +48,7 @@ test('第一章按企业缓存：跨版本复用，不写入版本快照', () =>
   assert.match(html, /if \(!force\) \{[\s\S]*getOtherChapter1Cache\(companyName,\s*product\)/);
   assert.match(html, /const hasPlaceholderSection = chapter1SectionsContainPlaceholder\(otherProofChapter1Sections\);/);
   assert.match(html, /if \(hasPlaceholderSection\) \{[\s\S]*clearOtherChapter1Cache\(companyName\);/);
+  assert.match(html, /if \(hasPlaceholderSection\) \{[\s\S]*return false;/);
   assert.match(html, /setOtherChapter1Cache\(companyName, otherProofChapter1Sections, product\);/);
   assert.doesNotMatch(html, /other_chapter1_sections/);
 });

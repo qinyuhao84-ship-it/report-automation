@@ -51,6 +51,7 @@ def test_chapter1_section_prompt_has_consulting_style_constraints():
     assert "不写具体数字、年份、金额、比例、增速、排名、市场份额" in prompt
     assert "数十毫秒" in prompt
     assert "围绕产品本身" in prompt
+    assert "本产品、该产品" in prompt
     assert '"section"' in prompt
 
 
@@ -251,6 +252,74 @@ def test_generate_other_chapter1_allow_partial_all_failed_raises_timeout(monkeyp
     with pytest.raises(other_proof.OtherProofTimeoutError) as exc_info:
         generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig(), allow_partial=True)
     assert "暂未生成完成" in str(exc_info.value)
+
+
+def test_generate_other_chapter1_repairs_incomplete_section_individually(monkeypatch):
+    def long_topic(prefix: str, count: int) -> str:
+        return "".join(f"{prefix}第{idx}句围绕供应链协同、质量控制和交付稳定性展开。" for idx in range(1, count + 1))
+
+    def batch_payload() -> str:
+        sections = []
+        for spec in other_proof.CHAPTER1_SECTION_SPECS:
+            if spec["key"] == "industry_supply_chain":
+                paragraphs = ["行业供应链围绕关键零部件、整机集成和场景交付形成协同体系。"]
+            else:
+                paragraphs = [
+                    f"{spec['title']}第{idx}段围绕产品定位、技术特征、应用场景和产业链位置展开，形成完整正文。"
+                    for idx in range(spec["slot_count"])
+                ]
+            sections.append({"key": spec["key"], "title": spec["title"], "paragraphs": paragraphs})
+        return json.dumps({"sections": sections}, ensure_ascii=False)
+
+    repaired_supply_chain = {
+        "section": {
+            "key": "industry_supply_chain",
+            "title": other_proof.CHAPTER1_SPEC_MAP["industry_supply_chain"]["title"],
+            "paragraphs": [
+                "行业供应链围绕上游部件、中游集成、下游交付和长期服务形成协同体系。",
+                long_topic("上游供应链", 4),
+                long_topic("中游制造与集成", 3),
+                long_topic("下游应用与分销", 3),
+                long_topic("行业供应链核心特征与挑战", 2),
+                long_topic("行业供应链发展方向", 5),
+            ],
+        }
+    }
+
+    class FakeClient:
+        def __init__(self):
+            self.prompts = []
+
+        def complete(self, messages, **_kwargs):
+            prompt = messages[-1]["content"]
+            self.prompts.append(prompt)
+            if "以下章节在第一轮生成中缺失" in prompt:
+                return json.dumps({"sections": []}, ensure_ascii=False)
+            if "请仅生成第一章中的一个小节：行业供应链" in prompt:
+                return json.dumps(repaired_supply_chain, ensure_ascii=False)
+            return batch_payload()
+
+    class FakeOrchestrator:
+        def __init__(self, client):
+            self.client = client
+
+        def is_available(self):
+            return True
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(
+        other_proof.LLMOrchestrator,
+        "from_config",
+        staticmethod(lambda _config: FakeOrchestrator(fake_client)),
+    )
+
+    result = generate_other_chapter1("AI+XR穿戴设备", other_proof.InferenceConfig(), allow_partial=False)
+
+    supply_chain = next(item for item in result["sections"] if item["key"] == "industry_supply_chain")
+    assert len(supply_chain["paragraphs"]) == other_proof.CHAPTER1_SPEC_MAP["industry_supply_chain"]["slot_count"]
+    assert all(paragraph != other_proof.PLACEHOLDER_TEXT for paragraph in supply_chain["paragraphs"])
+    assert any("第一章已逐节补全：行业供应链" in warning for warning in result["warnings"])
+    assert any("请仅生成第一章中的一个小节：行业供应链" in prompt for prompt in fake_client.prompts)
 
 
 def test_generate_other_chapter1_accepts_plain_text_and_maps_sections(monkeypatch):
