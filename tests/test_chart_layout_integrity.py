@@ -320,6 +320,22 @@ def test_other_chart_layout_unchanged_when_layer_count_matches_template(tmp_path
         assert str(after["target"]).endswith(".png")
 
 
+def test_other_docx_keeps_chapter1_with_placeholders_when_chapter1_empty(tmp_path: Path):
+    template_path = Path("0323-高安全性自锁紧型电源连接系统市场占有率证明报告-初版.docx")
+    payload = _build_other_payload_three_layers()
+    payload["chapter1_sections"] = []
+    payload["skip_chapter1"] = True
+    output_path = tmp_path / "other-placeholder-chapter1.docx"
+
+    warnings = other_proof.generate_other_docx(payload, template_path, output_path)
+
+    texts = _extract_paragraph_texts(output_path)
+    assert any(text.startswith("第一章 ") and "产品概况" in text for text in texts)
+    assert other_proof.PLACEHOLDER_TEXT in texts
+    assert any("跳过第一章标记" in item for item in warnings)
+    assert any("第一章存在未完成内容" in item for item in warnings)
+
+
 def test_chart_axis_uses_integer_hundreds_for_large_values():
     low, high, step = chart_docx._compute_y_axis([444.48, 463.15, 482.6])
     assert low == 0.0

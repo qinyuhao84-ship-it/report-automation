@@ -8,7 +8,7 @@ import subprocess
 import urllib.parse
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
@@ -87,7 +87,18 @@ SUPPLY_CHAIN_SUBTOPICS: List[str] = [
 CHAPTER1_SPEC_MAP = {item["key"]: item for item in CHAPTER1_SECTION_SPECS}
 EXPECTED_CHAPTER1_SLOT_COUNT = sum(item["slot_count"] for item in CHAPTER1_SECTION_SPECS)
 PLACEHOLDER_TEXT = "该部分生成失败，请人工补充。"
-CHAPTER1_RETRY_GUIDANCE = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”，系统会跳过第一章正文并继续生成后续章节。"
+CHAPTER1_RETRY_GUIDANCE = "第一章暂未生成完成。系统会保留已成功内容，失败位置写入占位内容，并在接口返回调试回放文件路径。"
+CHAPTER1_DEBUG_REPLAY_DIR = Path("output/chapter1_replays")
+CHAPTER1_DEBUG_TRIGGER_PATTERNS = (
+    "未生成成功",
+    "占位",
+    "错批",
+    "不匹配",
+    "标题正文错位",
+    "重排",
+    "段落不足",
+    "补全未成功",
+)
 AIQICHA_TIMEOUT = 20.0
 SEARCH_TIMEOUT = 20.0
 BROWSER_HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -97,11 +108,162 @@ BODY_HEADING_PATTERN = re.compile(
 
 
 class OtherProofError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, replay_file_path: str | None = None):
+        super().__init__(message)
+        self.replay_file_path = replay_file_path
 
 
 class OtherProofTimeoutError(OtherProofError):
     pass
+
+
+def _new_chapter1_debug_replay(
+    *,
+    product_name: str,
+    model: str,
+    allow_partial: bool,
+    max_output_tokens: int,
+) -> Dict[str, Any]:
+    return {
+        "kind": "chapter1_generation_replay",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "request": {
+            "product_name": product_name,
+            "model": model,
+            "allow_partial": allow_partial,
+            "max_output_tokens": max_output_tokens,
+            "expected_batches": [
+                {
+                    "batch_index": index,
+                    "keys": list(keys),
+                    "titles": [CHAPTER1_SPEC_MAP[key]["title"] for key in keys if key in CHAPTER1_SPEC_MAP],
+                }
+                for index, keys in enumerate(CHAPTER1_BATCH_KEYS, start=1)
+            ],
+        },
+        "batches": [],
+        "warning_history": [],
+        "events": [],
+    }
+
+
+def _record_chapter1_debug_event(
+    replay: Dict[str, Any] | None,
+    event_type: str,
+    message: str,
+    context: Dict[str, Any] | None = None,
+) -> None:
+    if replay is None:
+        return
+    event: Dict[str, Any] = {
+        "type": event_type,
+        "message": message,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    if context:
+        event["context"] = context
+    replay.setdefault("events", []).append(event)
+
+
+def _record_chapter1_warnings(
+    replay: Dict[str, Any] | None,
+    *,
+    stage: str,
+    warnings: Sequence[str],
+) -> None:
+    if replay is None or not warnings:
+        return
+    warning_list = [str(item) for item in warnings if str(item).strip()]
+    if not warning_list:
+        return
+    replay.setdefault("warning_history", []).append({"stage": stage, "warnings": warning_list})
+    for warning in warning_list:
+        if any(pattern in warning for pattern in CHAPTER1_DEBUG_TRIGGER_PATTERNS):
+            _record_chapter1_debug_event(replay, "warning_trigger", warning, {"stage": stage})
+
+
+def _chapter1_ordered_result(sections: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    section_map = {
+        str(item.get("key") or "").strip(): item
+        for item in sections
+        if isinstance(item, dict)
+    }
+    ordered_sections: List[Dict[str, Any]] = []
+    flattened_slots: List[Dict[str, Any]] = []
+    for spec in CHAPTER1_SECTION_SPECS:
+        section = section_map.get(str(spec["key"])) or {}
+        paragraphs = [
+            str(item).strip()
+            for item in (section.get("paragraphs") or [])
+            if str(item).strip()
+        ]
+        ordered_sections.append(
+            {
+                "key": spec["key"],
+                "title": spec["title"],
+                "expected_slot_count": spec["slot_count"],
+                "actual_paragraph_count": len(paragraphs),
+                "paragraphs": paragraphs,
+            }
+        )
+        for index in range(spec["slot_count"]):
+            flattened_slots.append(
+                {
+                    "section_key": spec["key"],
+                    "section_title": spec["title"],
+                    "slot_index": index + 1,
+                    "text": paragraphs[index] if index < len(paragraphs) else PLACEHOLDER_TEXT,
+                }
+            )
+    return {"ordered_sections": ordered_sections, "flattened_slots": flattened_slots}
+
+
+def _write_chapter1_debug_replay(
+    replay: Dict[str, Any],
+    *,
+    outcome: str,
+    reason: str,
+    warnings: Sequence[str] | None = None,
+    final_sections: Sequence[Dict[str, Any]] | None = None,
+    error: Dict[str, Any] | None = None,
+) -> str:
+    replay_data = copy.deepcopy(replay)
+    replay_data["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    replay_data["outcome"] = {"status": outcome, "reason": reason}
+    if warnings is not None:
+        replay_data["warnings"] = [str(item) for item in warnings]
+    if final_sections is not None:
+        replay_data["final_sections"] = list(final_sections)
+        replay_data["final_reordered_result"] = _chapter1_ordered_result(final_sections)
+    if error:
+        replay_data["error"] = error
+
+    CHAPTER1_DEBUG_REPLAY_DIR.mkdir(parents=True, exist_ok=True)
+    product = str(replay_data.get("request", {}).get("product_name") or "product").strip()
+    safe_product = re.sub(r"[^\w\u4e00-\u9fff]+", "-", product).strip("-")[:40] or "product"
+    filename = f"{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}-{safe_product}.json"
+    path = CHAPTER1_DEBUG_REPLAY_DIR / filename
+    path.write_text(json.dumps(replay_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path.resolve())
+
+
+def _chapter1_replay_should_write(
+    replay: Dict[str, Any],
+    *,
+    warnings: Sequence[str],
+    final_sections: Sequence[Dict[str, Any]],
+) -> bool:
+    if replay.get("events"):
+        return True
+    warning_text = "\n".join(str(item) for item in warnings)
+    if any(pattern in warning_text for pattern in CHAPTER1_DEBUG_TRIGGER_PATTERNS):
+        return True
+    return bool(_find_incomplete_chapter1_specs(list(final_sections)))
+
+
+def _set_error_replay_path(exc: OtherProofError, replay_file_path: str) -> OtherProofError:
+    exc.replay_file_path = replay_file_path
+    return exc
 
 
 def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_partial: bool = False) -> Dict[str, Any]:
@@ -123,25 +285,40 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
     if _is_reasoner_model(chapter1_model):
         chapter1_max_output_tokens = 4200
     warnings: List[str] = []
+    debug_replay = _new_chapter1_debug_replay(
+        product_name=product,
+        model=chapter1_model,
+        allow_partial=allow_partial,
+        max_output_tokens=chapter1_max_output_tokens,
+    )
 
-    try:
-        raw_sections, batch_warnings = _generate_chapter1_sections_in_batches(
-            client=orchestrator.client,
-            product_name=product,
-            model=chapter1_model,
-            timeout_seconds=chapter1_timeout_seconds,
-            max_output_tokens=chapter1_max_output_tokens,
-        )
-    except Exception as exc:
-        raise OtherProofTimeoutError(CHAPTER1_RETRY_GUIDANCE) from exc
+    raw_sections, batch_warnings = _generate_chapter1_sections_in_batches(
+        client=orchestrator.client,
+        product_name=product,
+        model=chapter1_model,
+        timeout_seconds=chapter1_timeout_seconds,
+        max_output_tokens=chapter1_max_output_tokens,
+        debug_replay=debug_replay,
+    )
 
     warnings.extend(batch_warnings)
+    _record_chapter1_warnings(debug_replay, stage="batch_generation", warnings=batch_warnings)
+    debug_replay["parsed_sections"] = copy.deepcopy(raw_sections)
 
     if not raw_sections:
-        raise OtherProofTimeoutError(CHAPTER1_RETRY_GUIDANCE)
+        warning = "第一章所有批次均未生成成功，已写入全章占位内容"
+        warnings.append(warning)
+        _record_chapter1_debug_event(
+            debug_replay,
+            "all_batches_failed",
+            warning,
+            {"batch_count": len(CHAPTER1_BATCH_KEYS)},
+        )
 
     normalized, normalize_warnings = normalize_chapter1_sections(raw_sections)
     warnings.extend(normalize_warnings)
+    _record_chapter1_warnings(debug_replay, stage="normalize", warnings=normalize_warnings)
+    debug_replay["normalized_after_batch_parse"] = copy.deepcopy(normalized)
     normalized, repair_warnings, repaired_keys = _repair_empty_chapter1_sections(
         client=orchestrator.client,
         model=chapter1_model,
@@ -165,6 +342,8 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
             )
         ]
     warnings.extend(repair_warnings)
+    _record_chapter1_warnings(debug_replay, stage="bulk_repair", warnings=repair_warnings)
+    debug_replay["normalized_after_bulk_repair"] = copy.deepcopy(normalized)
     if not allow_partial:
         normalized, individual_repair_warnings, individual_repaired_keys = _repair_incomplete_chapter1_sections_individually(
             client=orchestrator.client,
@@ -189,17 +368,31 @@ def generate_other_chapter1(product_name: str, config: InferenceConfig, allow_pa
                 )
             ]
         warnings.extend(individual_repair_warnings)
+        _record_chapter1_warnings(debug_replay, stage="individual_repair", warnings=individual_repair_warnings)
+        debug_replay["normalized_after_individual_repair"] = copy.deepcopy(normalized)
         strict_failed_titles = []
         for spec in _find_incomplete_chapter1_specs(normalized):
             strict_failed_titles.append(spec["title"])
         if strict_failed_titles:
-            raise OtherProofTimeoutError(
-                "第一章有部分小节内容不完整（"
-                + "、".join(strict_failed_titles)
-                + "），系统已停止写入，避免生成错乱报告。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”，系统会跳过第一章正文并继续生成后续章节。"
+            warning = "第一章有部分小节内容不完整（" + "、".join(strict_failed_titles) + "），已保留成功内容并写入占位内容"
+            warnings.append(warning)
+            _record_chapter1_debug_event(
+                debug_replay,
+                "incomplete_sections_kept_with_placeholders",
+                warning,
+                {"sections": strict_failed_titles},
             )
 
-    return {"sections": normalized, "warnings": warnings}
+    result = {"sections": normalized, "warnings": warnings}
+    if _chapter1_replay_should_write(debug_replay, warnings=warnings, final_sections=normalized):
+        result["replay_file_path"] = _write_chapter1_debug_replay(
+            debug_replay,
+            outcome="succeeded_with_debug_triggers",
+            reason="第一章生成过程中出现需要回放的问题信号",
+            warnings=warnings,
+            final_sections=normalized,
+        )
+    return result
 
 
 def _generate_chapter1_sections_in_batches(
@@ -209,20 +402,34 @@ def _generate_chapter1_sections_in_batches(
     model: str,
     timeout_seconds: int,
     max_output_tokens: int,
+    debug_replay: Dict[str, Any] | None = None,
 ) -> tuple[List[Dict[str, Any]], List[str]]:
     merged_sections: List[Dict[str, Any]] = []
     warnings: List[str] = []
     for batch_index, batch_keys in enumerate(CHAPTER1_BATCH_KEYS, start=1):
-        batch_sections, batch_warning = _generate_chapter1_batch(
-            client=client,
-            product_name=product_name,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            max_output_tokens=max_output_tokens,
-            batch_index=batch_index,
-            batch_keys=batch_keys,
-            generated_sections=merged_sections,
-        )
+        try:
+            batch_sections, batch_warning = _generate_chapter1_batch(
+                client=client,
+                product_name=product_name,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                max_output_tokens=max_output_tokens,
+                batch_index=batch_index,
+                batch_keys=batch_keys,
+                generated_sections=merged_sections,
+                debug_replay=debug_replay,
+            )
+        except Exception as exc:
+            titles = [CHAPTER1_SPEC_MAP[key]["title"] for key in batch_keys if key in CHAPTER1_SPEC_MAP]
+            warning = f"第一章第 {batch_index} 批（{'、'.join(titles)}）生成失败，已保留其他批次并写入占位内容"
+            warnings.append(warning)
+            _record_chapter1_debug_event(
+                debug_replay,
+                "batch_skipped_after_failure",
+                warning,
+                {"batch_index": batch_index, "batch_keys": list(batch_keys), "error": {"type": exc.__class__.__name__, "message": str(exc)}},
+            )
+            continue
         merged_sections.extend(batch_sections)
         if batch_warning:
             warnings.append(batch_warning)
@@ -239,6 +446,7 @@ def _generate_chapter1_batch(
     batch_index: int,
     batch_keys: Sequence[str],
     generated_sections: Sequence[Dict[str, Any]],
+    debug_replay: Dict[str, Any] | None = None,
 ) -> tuple[List[Dict[str, Any]], str]:
     batch_specs = [CHAPTER1_SPEC_MAP[key] for key in batch_keys if key in CHAPTER1_SPEC_MAP]
     messages = [
@@ -260,14 +468,33 @@ def _generate_chapter1_batch(
             ),
         },
     ]
-    raw = client.complete(
-        messages,
-        model=model,
-        temperature=0.15,
-        max_output_tokens=max_output_tokens,
-        timeout_seconds=timeout_seconds,
-        retry_max_attempts=1,
-    )
+    batch_record: Dict[str, Any] = {
+        "batch_index": batch_index,
+        "batch_keys": list(batch_keys),
+        "batch_titles": [CHAPTER1_SPEC_MAP[key]["title"] for key in batch_keys if key in CHAPTER1_SPEC_MAP],
+        "messages": copy.deepcopy(messages),
+    }
+    if debug_replay is not None:
+        debug_replay.setdefault("batches", []).append(batch_record)
+    try:
+        raw = client.complete(
+            messages,
+            model=model,
+            temperature=0.15,
+            max_output_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds,
+            retry_max_attempts=1,
+        )
+    except Exception as exc:
+        batch_record["error"] = {"type": exc.__class__.__name__, "message": str(exc)}
+        _record_chapter1_debug_event(
+            debug_replay,
+            "batch_generation_failed",
+            f"第一章第 {batch_index} 批模型请求失败",
+            {"batch_keys": list(batch_keys)},
+        )
+        raise
+    batch_record["raw_model_return"] = raw
 
     warning = ""
     raw_sections: Any
@@ -276,15 +503,34 @@ def _generate_chapter1_batch(
         raw_sections = parsed.get("sections")
         if not isinstance(raw_sections, list):
             raise OtherProofError("第一章 JSON 缺少 sections 数组")
+        batch_record["parse_method"] = "json"
     except OtherProofError:
         raw_sections, warning = _coerce_chapter1_sections_from_text(raw)
-    aligned_sections, align_warning = _align_batch_chapter1_sections(raw_sections, batch_keys)
+        batch_record["parse_method"] = "text_coerce"
+    batch_record["parsed_sections"] = copy.deepcopy(raw_sections)
+    if warning:
+        batch_record["parse_warning"] = warning
+    aligned_sections, align_warning = _align_batch_chapter1_sections(
+        raw_sections,
+        batch_keys,
+        debug_replay=debug_replay,
+        batch_record=batch_record,
+    )
     if align_warning:
         warning = f"{warning}；{align_warning}" if warning else align_warning
+    batch_record["aligned_sections"] = copy.deepcopy(aligned_sections)
+    if warning:
+        batch_record["warning"] = warning
+        _record_chapter1_warnings(debug_replay, stage=f"batch_{batch_index}", warnings=[warning])
     return aligned_sections, warning
 
 
-def _align_batch_chapter1_sections(raw_sections: Any, batch_keys: Sequence[str]) -> tuple[List[Dict[str, Any]], str]:
+def _align_batch_chapter1_sections(
+    raw_sections: Any,
+    batch_keys: Sequence[str],
+    debug_replay: Dict[str, Any] | None = None,
+    batch_record: Dict[str, Any] | None = None,
+) -> tuple[List[Dict[str, Any]], str]:
     if not isinstance(raw_sections, list):
         return [], ""
 
@@ -311,13 +557,34 @@ def _align_batch_chapter1_sections(raw_sections: Any, batch_keys: Sequence[str])
     if not cleaned:
         return [], ""
 
+    mismatch_warning = _find_chapter1_title_body_mismatch(cleaned)
+    if mismatch_warning:
+        if batch_record is not None:
+            batch_record.setdefault("events", []).append({"type": "title_body_mismatch", "message": mismatch_warning})
+        _record_chapter1_debug_event(
+            debug_replay,
+            "title_body_mismatch",
+            mismatch_warning,
+            {"batch_keys": list(batch_keys), "cleaned_sections": copy.deepcopy(cleaned)},
+        )
+        return [], mismatch_warning
+
     filtered = [item for item in cleaned if str(item.get("key") or "").strip() in batch_keys]
     if filtered:
         return filtered, ""
 
     # 返回里有明确 key 但全部不属于当前批次时，直接判定为错批，避免标题正文错配。
     if explicit_key_count > 0 and valid_key_count == 0:
-        return [], "第一章分批返回的小节与当前批次不匹配，已丢弃该批内容"
+        warning = "第一章分批返回的小节与当前批次不匹配，已丢弃该批内容"
+        if batch_record is not None:
+            batch_record.setdefault("events", []).append({"type": "wrong_batch", "message": warning})
+        _record_chapter1_debug_event(
+            debug_replay,
+            "wrong_batch",
+            warning,
+            {"batch_keys": list(batch_keys), "cleaned_sections": copy.deepcopy(cleaned)},
+        )
+        return [], warning
 
     expected_len = len(batch_keys)
     if len(cleaned) < expected_len or valid_key_count >= expected_len:
@@ -339,8 +606,49 @@ def _align_batch_chapter1_sections(raw_sections: Any, batch_keys: Sequence[str])
             }
         )
     if remapped:
-        return remapped, "第一章分批返回的 key 不完整，系统已按目录顺序重排"
+        warning = "第一章分批返回的 key 不完整，系统已按目录顺序重排"
+        if batch_record is not None:
+            batch_record.setdefault("events", []).append({"type": "batch_reordered", "message": warning})
+        _record_chapter1_debug_event(
+            debug_replay,
+            "batch_reordered",
+            warning,
+            {"batch_keys": list(batch_keys), "cleaned_sections": copy.deepcopy(cleaned), "remapped_sections": copy.deepcopy(remapped)},
+        )
+        return remapped, warning
     return [], ""
+
+
+def _chapter1_key_from_heading_prefix(text: str) -> str:
+    normalized = _clean_chapter1_paragraph_text(text)
+    normalized = re.sub(r"^第[一二三四五六七八九十0-9]+[章节]\s*", "", normalized)
+    normalized = re.sub(r"^[（(]?[一二三四五六七八九十0-9]+[）)、.．]\s*", "", normalized)
+    for spec in CHAPTER1_SECTION_SPECS:
+        if normalized.startswith(str(spec["title"])):
+            return str(spec["key"])
+    return ""
+
+
+def _find_chapter1_title_body_mismatch(sections: Sequence[Dict[str, Any]]) -> str:
+    for item in sections:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if key not in CHAPTER1_SPEC_MAP:
+            continue
+        title = str(item.get("title") or "").strip()
+        title_key = _key_from_title(title) if title else ""
+        if title_key and title_key != key:
+            expected_title = CHAPTER1_SPEC_MAP[key]["title"]
+            return f"第一章标题正文错位：key={key} 应对应《{expected_title}》，模型返回 title=《{title}》"
+        paragraphs = [str(text).strip() for text in (item.get("paragraphs") or []) if str(text).strip()]
+        if paragraphs:
+            body_key = _chapter1_key_from_heading_prefix(paragraphs[0])
+            if body_key and body_key != key:
+                expected_title = CHAPTER1_SPEC_MAP[key]["title"]
+                actual_title = CHAPTER1_SPEC_MAP[body_key]["title"]
+                return f"第一章标题正文错位：key={key} 应对应《{expected_title}》，正文开头像《{actual_title}》"
+    return ""
 
 
 def generate_other_chapter1_section(
@@ -640,6 +948,10 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
         raise OtherProofError("证明范围不能为空")
     if not market_name:
         raise OtherProofError("测算市场名称不能为空")
+    requested_skip_chapter1 = bool(data.get("skip_chapter1"))
+    if requested_skip_chapter1:
+        warnings.append("请求中包含跳过第一章标记，已改为保留第一章并写入占位内容")
+    skip_chapter1 = False
 
     raw_sources = [source for source in (data.get("sources") or []) if isinstance(source, dict)]
     try:
@@ -669,12 +981,8 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
     rank_map = _build_year_rank_map(sorted_rows)
     layer_count = len(chapter2_layers)
     company_count = len(sorted_rows)
-    skip_chapter1 = bool(data.get("skip_chapter1"))
-    if skip_chapter1:
-        chapter1_sections = []
-    else:
-        chapter1_sections, chapter1_warnings = normalize_chapter1_sections(data.get("chapter1_sections"))
-        warnings.extend(chapter1_warnings)
+    chapter1_sections, chapter1_warnings = normalize_chapter1_sections(data.get("chapter1_sections"))
+    warnings.extend(chapter1_warnings)
 
     with zipfile.ZipFile(template_path, "r") as archive:
         xml_content = archive.read("word/document.xml")
@@ -724,12 +1032,9 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
         sorted_rows=sorted_rows,
         self_company_name=self_row["display_name"],
     )
-    if skip_chapter1:
-        _remove_chapter1_body_and_toc(root)
-    else:
-        _ensure_chapter1_environment_heading(root, field_paragraphs)
-        _normalize_chapter1_body_paragraphs_and_styles(field_paragraphs)
-        _compress_chapter1_visual_paragraphs(root, field_paragraphs)
+    _ensure_chapter1_environment_heading(root, field_paragraphs)
+    _normalize_chapter1_body_paragraphs_and_styles(field_paragraphs)
+    _compress_chapter1_visual_paragraphs(root, field_paragraphs)
     _apply_body_plain_paragraph_justification(root)
     _set_signature_block_right_alignment(root)
     _remove_section_page_number_restart(root)
@@ -1017,7 +1322,7 @@ def _build_other_values(
     if len(chapter1_slots) != EXPECTED_CHAPTER1_SLOT_COUNT:
         raise OtherProofError(f"第一章段落数量异常：期望 {EXPECTED_CHAPTER1_SLOT_COUNT}，实际 {len(chapter1_slots)}")
     if not skip_chapter1 and any(_is_chapter1_placeholder_text(item) for item in chapter1_slots):
-        raise OtherProofError("第一章仍存在未完成内容，请重新生成第一章后再导出 Word")
+        warnings.append("第一章存在未完成内容，已按占位内容写入 Word")
 
     self_rank_23 = rank_map["2023"][self_row["display_name"]]
     self_rank_24 = rank_map["2024"][self_row["display_name"]]

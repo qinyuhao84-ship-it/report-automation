@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import httpx
 import other_proof
@@ -25,6 +26,11 @@ from other_proof import (
     lookup_other_companies,
     normalize_chapter1_sections,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_chapter1_debug_replays(tmp_path, monkeypatch):
+    monkeypatch.setattr(other_proof, "CHAPTER1_DEBUG_REPLAY_DIR", tmp_path / "chapter1_replays")
 
 
 def test_chapter1_prompt_uses_report_style_requirements():
@@ -162,7 +168,7 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
     assert "section_key" not in kwargs
 
 
-def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
+def test_generate_other_chapter1_all_transport_errors_returns_placeholder_sections(monkeypatch):
     class FakeClient:
         def complete(self, *_args, **_kwargs):
             raise httpx.RemoteProtocolError("peer closed connection")
@@ -180,12 +186,19 @@ def test_generate_other_chapter1_wraps_transport_errors_as_timeout(monkeypatch):
         staticmethod(lambda _config: FakeOrchestrator()),
     )
 
-    try:
-        generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
-    except other_proof.OtherProofTimeoutError as exc:
-        assert "暂未生成完成" in str(exc)
-    else:
-        raise AssertionError("expected OtherProofTimeoutError")
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
+
+    assert len(result["sections"]) == 9
+    assert any("所有批次均未生成成功" in item for item in result["warnings"])
+    assert all(
+        paragraph == other_proof.PLACEHOLDER_TEXT
+        for section in result["sections"]
+        for paragraph in section["paragraphs"]
+    )
+    replay_path = Path(result["replay_file_path"])
+    assert replay_path.is_file()
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    assert replay["final_reordered_result"]["flattened_slots"][0]["text"] == other_proof.PLACEHOLDER_TEXT
 
 
 def test_generate_other_chapter1_allow_partial_writes_placeholders(monkeypatch):
@@ -229,9 +242,16 @@ def test_generate_other_chapter1_allow_partial_writes_placeholders(monkeypatch):
     assert any("定义" in item and "未生成成功" in item for item in result["warnings"])
     background = next(item for item in result["sections"] if item["key"] == "background_overview")
     assert all(p == other_proof.PLACEHOLDER_TEXT for p in background["paragraphs"])
+    replay_path = Path(result["replay_file_path"])
+    assert replay_path.is_file()
+    replay = json.loads(replay_path.read_text(encoding="utf-8"))
+    assert replay["batches"][0]["raw_model_return"]
+    assert "parsed_sections" in replay["batches"][0]
+    assert "final_reordered_result" in replay
+    assert any(event["type"] in {"wrong_batch", "warning_trigger"} for event in replay["events"])
 
 
-def test_generate_other_chapter1_allow_partial_all_failed_raises_timeout(monkeypatch):
+def test_generate_other_chapter1_allow_partial_all_failed_returns_placeholders(monkeypatch):
     class FakeClient:
         def complete(self, *_args, **_kwargs):
             raise httpx.ReadTimeout("timed out")
@@ -249,9 +269,65 @@ def test_generate_other_chapter1_allow_partial_all_failed_raises_timeout(monkeyp
         staticmethod(lambda _config: FakeOrchestrator()),
     )
 
-    with pytest.raises(other_proof.OtherProofTimeoutError) as exc_info:
-        generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig(), allow_partial=True)
-    assert "暂未生成完成" in str(exc_info.value)
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig(), allow_partial=True)
+
+    assert len(result["sections"]) == 9
+    assert any("所有批次均未生成成功" in item for item in result["warnings"])
+    assert all(
+        paragraph == other_proof.PLACEHOLDER_TEXT
+        for section in result["sections"]
+        for paragraph in section["paragraphs"]
+    )
+    assert Path(result["replay_file_path"]).is_file()
+
+
+def test_generate_other_chapter1_partial_batch_failure_keeps_success_and_placeholders(monkeypatch):
+    class FakeClient:
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return json.dumps(
+                    {
+                        "sections": [
+                            {
+                                "key": "background_overview",
+                                "title": "背景与概述",
+                                "paragraphs": [
+                                    "背景与概述第1段，保留成功内容。",
+                                    "背景与概述第2段，保留成功内容。",
+                                    "背景与概述第3段，保留成功内容。",
+                                    "背景与概述第4段，保留成功内容。",
+                                ],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            raise httpx.ReadTimeout("timed out")
+
+    class FakeOrchestrator:
+        def __init__(self):
+            self.client = FakeClient()
+
+        def is_available(self):
+            return True
+
+    monkeypatch.setattr(
+        other_proof.LLMOrchestrator,
+        "from_config",
+        staticmethod(lambda _config: FakeOrchestrator()),
+    )
+
+    result = generate_other_chapter1("高安全性自锁紧型电源连接系统", other_proof.InferenceConfig())
+
+    section_map = {item["key"]: item for item in result["sections"]}
+    assert section_map["background_overview"]["paragraphs"][0] == "背景与概述第1段，保留成功内容。"
+    assert all(p == other_proof.PLACEHOLDER_TEXT for p in section_map["definition"]["paragraphs"])
+    assert any("第 2 批" in item and "生成失败" in item for item in result["warnings"])
+    assert Path(result["replay_file_path"]).is_file()
 
 
 def test_generate_other_chapter1_repairs_incomplete_section_individually(monkeypatch):

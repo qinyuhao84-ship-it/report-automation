@@ -137,7 +137,7 @@ def test_other_chapter1_endpoint_returns_504_on_timeout(monkeypatch):
 
     def fake_generate_other_chapter1(_product_name, _config, allow_partial=False):
         assert allow_partial is False
-        raise app_module.OtherProofTimeoutError("第一章生成超时。你可以直接重试，或勾选“第一章失败后跳过继续生成”。")
+        raise app_module.OtherProofTimeoutError("第一章生成超时。请查看调试回放文件后重试。")
 
     monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
 
@@ -145,6 +145,25 @@ def test_other_chapter1_endpoint_returns_504_on_timeout(monkeypatch):
 
     assert resp.status_code == 504
     assert "第一章生成超时" in resp.json().get("detail", "")
+
+
+def test_other_chapter1_endpoint_returns_replay_path_on_failure(monkeypatch):
+    client = TestClient(app_module.app)
+
+    def fake_generate_other_chapter1(_product_name, _config, allow_partial=False):
+        raise app_module.OtherProofTimeoutError(
+            "第一章生成失败",
+            replay_file_path="/tmp/chapter1-replay.json",
+        )
+
+    monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
+
+    resp = client.post("/other-proof/chapter1", json={"product_name": "示例产品"})
+
+    assert resp.status_code == 504
+    detail = resp.json().get("detail")
+    assert detail["message"] == "第一章生成失败"
+    assert detail["replay_file_path"] == "/tmp/chapter1-replay.json"
 
 
 def test_other_chapter1_endpoint_passes_allow_partial(monkeypatch):
@@ -446,3 +465,24 @@ def test_generate_other_template_returns_warning_header(monkeypatch, tmp_path: P
     assert raw
     decoded = json.loads(urllib.parse.unquote(raw))
     assert decoded == ["第一章《行业发展趋势》未生成成功，已写入占位内容"]
+
+
+def test_generate_other_template_returns_chapter1_replay_header(monkeypatch, tmp_path: Path):
+    client = TestClient(app_module.app)
+    payload = build_other_payload()
+    payload["chapter1_replay_file_path"] = "/tmp/chapter1-replay.json"
+
+    def fake_generate(data, _template_path, output_path):
+        assert data["chapter1_replay_file_path"] == "/tmp/chapter1-replay.json"
+        Path(output_path).write_bytes(b"PK\x03\x04fake-other-docx")
+        return []
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(app_module, "generate_other_docx", fake_generate)
+
+    resp = client.post("/generate", json=payload)
+
+    assert resp.status_code == 200
+    raw = resp.headers.get("X-Chapter1-Replay-File-Path")
+    assert raw
+    assert urllib.parse.unquote(raw) == "/tmp/chapter1-replay.json"

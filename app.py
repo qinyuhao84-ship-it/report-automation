@@ -410,6 +410,7 @@ class DataModel(BaseModel):
     market_name: Optional[str] = None
     chapter2_layers: List[OtherProofLayer] = Field(default_factory=list)
     chapter1_sections: List[Chapter1Section] = Field(default_factory=list)
+    chapter1_replay_file_path: Optional[str] = None
     skip_chapter1: bool = False
     resolved_company_profiles: List[ResolvedCompanyProfile] = Field(default_factory=list)
 
@@ -906,6 +907,13 @@ TEMPLATE_PATH = "0315-浙江达航数据技术有限公司-自证-初版.docx"
 OTHER_TEMPLATE_PATH = "0323-高安全性自锁紧型电源连接系统市场占有率证明报告-初版.docx"
 
 
+def _other_proof_error_detail(exc: OtherProofError):
+    replay_file_path = getattr(exc, "replay_file_path", None)
+    if replay_file_path:
+        return {"message": str(exc), "replay_file_path": replay_file_path}
+    return str(exc)
+
+
 @app.post("/other-proof/chapter1")
 def generate_other_proof_chapter1_api(payload: Chapter1Request):
     try:
@@ -915,9 +923,9 @@ def generate_other_proof_chapter1_api(payload: Chapter1Request):
             allow_partial=bool(payload.allow_partial),
         )
     except OtherProofTimeoutError as exc:
-        raise HTTPException(status_code=504, detail=str(exc))
+        raise HTTPException(status_code=504, detail=_other_proof_error_detail(exc))
     except OtherProofError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=_other_proof_error_detail(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -932,9 +940,9 @@ def generate_other_proof_chapter1_section_api(payload: Chapter1SectionRequest):
             InferenceConfig(),
         )
     except OtherProofTimeoutError as exc:
-        raise HTTPException(status_code=504, detail=str(exc))
+        raise HTTPException(status_code=504, detail=_other_proof_error_detail(exc))
     except OtherProofError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=_other_proof_error_detail(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -944,7 +952,7 @@ def lookup_other_proof_companies_api(payload: CompanyLookupRequest):
     try:
         return lookup_other_companies([item.model_dump() for item in payload.companies])
     except OtherProofError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=_other_proof_error_detail(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -959,6 +967,8 @@ def generate_api(data: DataModel):
             headers = {}
             if warnings:
                 headers["X-Generate-Warnings"] = urllib.parse.quote(json.dumps(warnings, ensure_ascii=False))
+            if data.chapter1_replay_file_path:
+                headers["X-Chapter1-Replay-File-Path"] = urllib.parse.quote(data.chapter1_replay_file_path)
             return FileResponse(
                 "output.docx",
                 media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -968,7 +978,7 @@ def generate_api(data: DataModel):
         else:
             raise HTTPException(status_code=400, detail="不支持的模板类型")
     except OtherProofError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=_other_proof_error_detail(exc))
     except HTTPException:
         raise
     except Exception as e:

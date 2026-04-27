@@ -888,10 +888,6 @@
                 <option value="other">他证</option>
               </select>
             </div>
-            <label class="skip-ch1-option other-only" style="display:none;">
-              <input id="skipChapter1OnFailure" type="checkbox" />
-              第一章失败后跳过继续生成
-            </label>
             <button id="stopChapter1Btn" class="btn subtle" type="button" style="display:none;" onclick="abortOtherChapter1Generation()">终止第一章生成</button>
             <button id="regenChapter1Btn" class="btn subtle" type="button" style="display:none;" onclick="regenerateOtherChapter1()">重新生成第一章</button>
             <button class="btn accent" type="button" onclick="generate()">生成最终 Word</button>
@@ -908,6 +904,7 @@
     let lastSavedSnapshotText = "";
     let draftLibrary = null;
     let otherProofChapter1Sections = [];
+    let otherProofChapter1ReplayFilePath = "";
     const OTHER_CHAPTER1_CACHE_KEY = "report_other_chapter1_by_company_v1";
     let otherProofChapter1CacheByCompany = {};
     let otherProofResolvedProfiles = [];
@@ -915,13 +912,13 @@
     let otherChapter1AbortController = null;
     let chapter1AbortHappened = false;
     const CHAPTER1_SECTION_SPECS = [
-      { key: "background_overview", title: "背景与概述", slot_count: 3 },
-      { key: "definition", title: "定义", slot_count: 4 },
-      { key: "working_principle", title: "工作原理", slot_count: 6 },
-      { key: "product_attributes", title: "产品属性", slot_count: 6 },
-      { key: "technical_specifications", title: "技术规范", slot_count: 4 },
+      { key: "background_overview", title: "背景与概述", slot_count: 4 },
+      { key: "definition", title: "定义", slot_count: 3 },
+      { key: "working_principle", title: "工作原理", slot_count: 14 },
+      { key: "product_attributes", title: "产品属性", slot_count: 11 },
+      { key: "technical_specifications", title: "技术规范", slot_count: 5 },
       { key: "industry_history", title: "行业发展历程", slot_count: 5 },
-      { key: "industry_environment", title: "行业发展环境", slot_count: 28 },
+      { key: "industry_environment", title: "行业发展环境", slot_count: 17 },
       { key: "industry_trends", title: "行业发展趋势", slot_count: 28 },
       { key: "industry_supply_chain", title: "行业供应链", slot_count: 18 },
     ];
@@ -1026,6 +1023,7 @@
       const product = document.getElementById("product_name")?.value || "";
       const entry = getOtherChapter1Cache(companyName, product);
       otherProofChapter1Sections = entry ? entry.sections : [];
+      otherProofChapter1ReplayFilePath = "";
       if (isOtherTemplate()) {
         updateChapter1State(
           otherProofChapter1Sections.length
@@ -1337,6 +1335,17 @@
       const el = document.getElementById("chapter1State");
       if (!el) return;
       el.textContent = message || "第一章：尚未生成";
+    }
+
+    function formatApiErrorDetail(err, fallback) {
+      const detail = err && err.detail;
+      if (detail && typeof detail === "object") {
+        const message = detail.message || fallback;
+        return detail.replay_file_path
+          ? `${message} 调试回放文件：${detail.replay_file_path}`
+          : message;
+      }
+      return detail || fallback;
     }
 
     function setChapter1RunningState(isRunning) {
@@ -2144,7 +2153,7 @@
       try {
         setStatus(force ? "正在重新生成第一章..." : "正在生成第一章...");
         updateChapter1State("第一章：分 5 个部分生成中");
-        const chapter1RetryTip = "第一章暂未生成完成。通常是模型响应较慢或服务繁忙。请直接重试；如需先继续出报告，可勾选“第一章失败后跳过继续生成”，系统会跳过第一章正文并继续生成后续章节。";
+        const chapter1RetryTip = "第一章暂未生成完成。系统会保留已成功内容，失败位置写入占位内容，并返回调试回放文件路径。";
         chapter1AbortHappened = false;
         otherChapter1AbortController = new AbortController();
         setChapter1RunningState(true);
@@ -2171,17 +2180,14 @@
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
           updateChapter1State("第一章：生成失败");
-          if (resp.status === 504) {
-            setStatus(err.detail || chapter1RetryTip, "error");
-          } else {
-            setStatus(err.detail || chapter1RetryTip, "error");
-          }
+          setStatus(formatApiErrorDetail(err, chapter1RetryTip), "error");
           return false;
         }
 
         const body = await resp.json().catch(() => ({}));
         const generatedSections = Array.isArray(body && body.sections) ? body.sections : [];
         const warnings = Array.isArray(body && body.warnings) ? body.warnings : [];
+        const replayFilePath = typeof body.replay_file_path === "string" ? body.replay_file_path : "";
         if (!generatedSections.length) {
           updateChapter1State("第一章：生成失败");
           setStatus(chapter1RetryTip, "error");
@@ -2189,13 +2195,19 @@
         }
 
         otherProofChapter1Sections = generatedSections;
+        otherProofChapter1ReplayFilePath = replayFilePath;
         const hasPlaceholderSection = chapter1SectionsContainPlaceholder(otherProofChapter1Sections);
         if (hasPlaceholderSection) {
           clearOtherChapter1Cache(companyName);
-          otherProofChapter1Sections = [];
-          updateChapter1State("第一章：生成失败");
-          setStatus(chapter1RetryTip, "error");
-          return false;
+          saveDraft(true);
+          updateChapter1State(`第一章：部分生成 ${otherProofChapter1Sections.length} 个小节，失败位置已占位`);
+          setStatus(
+            replayFilePath
+              ? `第一章部分生成，失败位置已占位，可继续生成 Word；调试回放文件：${replayFilePath}`
+              : "第一章部分生成，失败位置已占位，可继续生成 Word",
+            "error"
+          );
+          return true;
         } else {
           setOtherChapter1Cache(companyName, otherProofChapter1Sections, product);
         }
@@ -2205,6 +2217,7 @@
         } else {
           updateChapter1State(`第一章：已生成并缓存 ${otherProofChapter1Sections.length} 个小节`);
         }
+        setStatus(replayFilePath ? `第一章已生成；调试回放文件：${replayFilePath}` : "第一章已生成");
         return true;
       } catch (_e) {
         if (_e && _e.name === "AbortError") {
@@ -2339,16 +2352,9 @@
         }
 
         setStatus("正在生成第一章...");
-        const skipChapter1OnFailure = document.getElementById("skipChapter1OnFailure")?.checked === true;
-        let skipChapter1ForExport = false;
         const chapter1Ready = await ensureOtherChapter1(false, false);
         if (!chapter1Ready) {
-          if (chapter1AbortHappened) return;
-          if (!skipChapter1OnFailure) return;
-          otherProofChapter1Sections = [];
-          skipChapter1ForExport = true;
-          updateChapter1State("第一章：生成失败，已跳过，最终 Word 不写入第一章正文");
-          setStatus("第一章生成失败，已按设置跳过，继续后续生成");
+          return;
         }
 
         setStatus("正在检查第三章企业基本信息...");
@@ -2361,8 +2367,9 @@
         data.proof_scope = proofScope;
         data.market_name = marketName;
         data.chapter2_layers = otherLayerPlan.layers;
-        data.chapter1_sections = skipChapter1ForExport ? [] : otherProofChapter1Sections;
-        data.skip_chapter1 = skipChapter1ForExport;
+        data.chapter1_sections = otherProofChapter1Sections;
+        data.chapter1_replay_file_path = otherProofChapter1ReplayFilePath;
+        data.skip_chapter1 = false;
         data.resolved_company_profiles = otherProofResolvedProfiles;
         data.sources = otherLayerPlan.sources;
       }
@@ -2376,8 +2383,8 @@
         });
 
         if (!r.ok) {
-          const err = await r.json();
-          setStatus("Word 生成失败：" + (err.detail || "未知错误"), "error");
+          const err = await r.json().catch(() => ({}));
+          setStatus("Word 生成失败：" + formatApiErrorDetail(err, "未知错误"), "error");
           return;
         }
 
@@ -2389,6 +2396,8 @@
         a.click();
         document.body.removeChild(a);
         const rawWarnings = r.headers.get("X-Generate-Warnings");
+        const rawReplayPath = r.headers.get("X-Chapter1-Replay-File-Path");
+        const replayPath = rawReplayPath ? decodeURIComponent(rawReplayPath) : "";
         saveDraft(true);
         if (rawWarnings) {
           let warnings = [];
@@ -2399,11 +2408,12 @@
           }
           if (warnings.length) {
             const summary = warnings.slice(0, 3).join("；");
-            setStatus(`Word 已生成，但有 ${warnings.length} 处需要人工补充：${summary}`, "error");
+            const replayText = replayPath ? `；调试回放文件：${replayPath}` : "";
+            setStatus(`Word 已生成，但有 ${warnings.length} 处需要人工补充：${summary}${replayText}`, "error");
             return;
           }
         }
-        setStatus("Word 生成成功，已开始下载");
+        setStatus(replayPath ? `Word 生成成功，已开始下载；调试回放文件：${replayPath}` : "Word 生成成功，已开始下载");
       } catch (_e) {
         setStatus("网络异常，Word 生成失败", "error");
       }

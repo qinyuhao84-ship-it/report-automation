@@ -48,7 +48,7 @@ test('第一章按企业缓存：跨版本复用，不写入版本快照', () =>
   assert.match(html, /if \(!force\) \{[\s\S]*getOtherChapter1Cache\(companyName,\s*product\)/);
   assert.match(html, /const hasPlaceholderSection = chapter1SectionsContainPlaceholder\(otherProofChapter1Sections\);/);
   assert.match(html, /if \(hasPlaceholderSection\) \{[\s\S]*clearOtherChapter1Cache\(companyName\);/);
-  assert.match(html, /if \(hasPlaceholderSection\) \{[\s\S]*return false;/);
+  assert.match(html, /if \(hasPlaceholderSection\) \{[\s\S]*失败位置已占位[\s\S]*return true;/);
   assert.match(html, /setOtherChapter1Cache\(companyName, otherProofChapter1Sections, product\);/);
   assert.doesNotMatch(html, /other_chapter1_sections/);
 });
@@ -100,18 +100,19 @@ test('竞争对手输入不自动跳格，也不自动重排行', () => {
   );
 });
 
-test('他证支持第一章失败后跳过继续生成', () => {
-  assert.match(html, /id="skipChapter1OnFailure"/);
+test('他证第一章部分失败时继续导出并显示回放路径', () => {
+  assert.doesNotMatch(html, /id="skipChapter1OnFailure"/);
   assert.match(html, /id="stopChapter1Btn"/);
-  assert.match(html, /if \(resp\.status === 504\) \{/);
-  assert.match(html, /可勾选“第一章失败后跳过继续生成”/);
   assert.match(html, /function abortOtherChapter1Generation\(\) \{/);
   assert.match(html, /signal: otherChapter1AbortController\.signal/);
-  assert.match(html, /const skipChapter1OnFailure = document\.getElementById\("skipChapter1OnFailure"\)\?\.checked === true;/);
   assert.match(html, /allow_partial:\s*false/);
-  assert.match(html, /if \(!skipChapter1OnFailure\) return;/);
-  assert.match(html, /第一章：生成失败，已跳过，最终 Word 不写入第一章正文/);
-  assert.match(html, /data\.skip_chapter1 = skipChapter1ForExport;/);
+  assert.match(html, /formatApiErrorDetail\(err, chapter1RetryTip\)/);
+  assert.match(html, /调试回放文件/);
+  assert.match(html, /data\.chapter1_replay_file_path = otherProofChapter1ReplayFilePath;/);
+  assert.match(html, /data\.skip_chapter1 = false;/);
+  assert.match(html, /X-Chapter1-Replay-File-Path/);
+  assert.doesNotMatch(html, /skipChapter1ForExport/);
+  assert.doesNotMatch(html, /最终 Word 不写入第一章正文/);
 });
 
 test('导出文件名：自证按公司名，他证按产品名', () => {
