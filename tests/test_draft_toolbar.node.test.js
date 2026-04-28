@@ -37,7 +37,7 @@ test('按钮交互增强：状态机、防连点、快捷键', () => {
 test('第一章按企业缓存：跨版本复用，不写入版本快照', () => {
   assert.match(html, /const OTHER_CHAPTER1_CACHE_KEY = "report_other_chapter1_by_company_v1"/);
   assert.match(html, /function chapter1SectionsContainPlaceholder\(sections\) \{/);
-  assert.match(html, /slot_count:\s*18/);
+  assert.match(html, /slot_count:\s*6/);
   assert.match(html, /if \(paragraphs\.length < spec\.slot_count\) return true;/);
   assert.match(html, /text\.startsWith\("该部分生成失败"\)/);
   assert.match(html, /function isReusableOtherChapter1CacheEntry\(entry, productName = ""\) \{/);

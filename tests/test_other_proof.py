@@ -40,7 +40,7 @@ def test_chapter1_prompt_uses_report_style_requirements():
     assert "行业研究报告" in prompt
     assert "禁止输出“总体工作原理”“机械自锁结构”这类孤立小标题或短语" in prompt
     assert "每个一级部分至少 2 段" in prompt
-    assert "industry_supply_chain 必须包含“（一）到（五）”五个小分类" in prompt
+    assert "industry_supply_chain 必须正好 6 段" in prompt
 
 
 def test_chapter1_section_prompt_has_consulting_style_constraints():
@@ -101,26 +101,11 @@ def test_generate_other_chapter1_caps_request_budget(monkeypatch):
             if key == "industry_supply_chain":
                 paragraphs = [
                     "行业供应链围绕上游部件、中游集成、下游交付和长期协同形成完整体系。",
-                    *[
-                        f"上游供应链段落 {idx} 聚焦芯片、光学模组、传感器和核心零部件的稳定供应。"
-                        for idx in range(4)
-                    ],
-                    *[
-                        f"中游制造与集成段落 {idx} 聚焦设计、组装、系统集成和质量控制。"
-                        for idx in range(3)
-                    ],
-                    *[
-                        f"下游应用与分销段落 {idx} 聚焦应用行业、客户结构、渠道分销和交付服务。"
-                        for idx in range(3)
-                    ],
-                    *[
-                        f"行业供应链核心特征与挑战段落 {idx} 聚焦协同复杂度、成本压力和质量一致性。"
-                        for idx in range(2)
-                    ],
-                    *[
-                        f"行业供应链发展方向段落 {idx} 聚焦模块化设计、标准化接口和生态协同。"
-                        for idx in range(5)
-                    ],
+                    "上游供应链聚焦芯片、光学模组、传感器和核心零部件的稳定供应。",
+                    "中游制造与集成聚焦设计、组装、系统集成和质量控制。",
+                    "下游应用与分销聚焦应用行业、客户结构、渠道分销和交付服务。",
+                    "行业供应链核心特征与挑战聚焦协同复杂度、成本压力和质量一致性。",
+                    "行业供应链发展方向聚焦模块化设计、标准化接口和生态协同。",
                 ]
             else:
                 paragraphs = [
@@ -515,7 +500,7 @@ def test_normalize_chapter1_sections_merges_heading_fragments():
     assert any("工作原理" in item for item in warnings)
 
 
-def test_normalize_chapter1_sections_supply_chain_always_has_five_subsections():
+def test_normalize_chapter1_sections_supply_chain_uses_six_topic_slots():
     sections, _warnings = normalize_chapter1_sections(
         [
             {
@@ -570,10 +555,10 @@ def test_normalize_chapter1_sections_supply_chain_remaps_body_to_matching_subtit
     )
     target = next(item for item in sections if item["key"] == "industry_supply_chain")
     assert "依赖芯片" in target["paragraphs"][1]
-    assert "算法、光学" in target["paragraphs"][5]
-    assert "工业运维" in target["paragraphs"][8]
-    assert "跨学科协同复杂" in target["paragraphs"][11]
-    assert "模块化设计" in target["paragraphs"][13]
+    assert "算法、光学" in target["paragraphs"][2]
+    assert "工业运维" in target["paragraphs"][3]
+    assert "跨学科协同复杂" in target["paragraphs"][4]
+    assert "模块化设计" in target["paragraphs"][5]
 
 
 def test_supply_chain_batch_prompt_uses_six_complete_topic_paragraphs():

@@ -66,11 +66,11 @@ def _build_complete_chapter1_sections() -> list[dict]:
     for spec in other_proof.CHAPTER1_SECTION_SPECS:
         if spec["key"] == "industry_supply_chain":
             paragraphs = ["行业供应链围绕核心零部件、整机集成、渠道交付和生态协同形成完整体系。"]
-            paragraphs += ["上游供应链聚焦芯片、光学模组、传感器、结构件和能源部件的稳定供给。"] * 4
-            paragraphs += ["中游制造与集成聚焦工业设计、软硬件协同、整机组装、测试验证和质量控制。"] * 3
-            paragraphs += ["下游应用与分销聚焦企业级场景、消费场景、渠道交付和售后服务。"] * 3
-            paragraphs += ["行业供应链的核心特征与面临的挑战体现在跨学科协同、质量一致性和成本控制。"] * 2
-            paragraphs += ["行业供应链的发展方向聚焦模块化设计、标准化接口、生态协同和区域化交付。"] * 5
+            paragraphs += ["上游供应链聚焦芯片、光学模组、传感器、结构件和能源部件的稳定供给。"]
+            paragraphs += ["中游制造与集成聚焦工业设计、软硬件协同、整机组装、测试验证和质量控制。"]
+            paragraphs += ["下游应用与分销聚焦企业级场景、消费场景、渠道交付和售后服务。"]
+            paragraphs += ["行业供应链的核心特征与面临的挑战体现在跨学科协同、质量一致性和成本控制。"]
+            paragraphs += ["行业供应链的发展方向聚焦模块化设计、标准化接口、生态协同和区域化交付。"]
         else:
             paragraphs = [
                 f"{spec['title']}正文围绕示例产品的产品定位、技术特征、应用场景和产业链位置展开，形成完整咨询报告段落。"

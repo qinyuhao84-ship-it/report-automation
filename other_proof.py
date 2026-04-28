@@ -26,6 +26,8 @@ def _register_all_namespaces(xml_content):
     # Extract all xmlns:prefix="uri" from the XML content
     ns_matches = re.findall(r'xmlns:([^=]+)="([^"]+)"', xml_content.decode('utf-8') if isinstance(xml_content, bytes) else xml_content)
     for prefix, uri in ns_matches:
+        if re.match(r"ns\d+$", prefix):
+            continue
         ET.register_namespace(prefix, uri)
 
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
@@ -41,7 +43,7 @@ CHAPTER1_SECTION_SPECS: List[Dict[str, Any]] = [
     {"key": "industry_history", "title": "行业发展历程", "slot_count": 5},
     {"key": "industry_environment", "title": "行业发展环境", "slot_count": 17},
     {"key": "industry_trends", "title": "行业发展趋势", "slot_count": 28},
-    {"key": "industry_supply_chain", "title": "行业供应链", "slot_count": 18},
+    {"key": "industry_supply_chain", "title": "行业供应链", "slot_count": 6},
 ]
 CHAPTER1_BATCH_KEYS: List[List[str]] = [
     [
@@ -73,7 +75,7 @@ CHAPTER1_VISIBLE_PARAGRAPH_COUNTS: Dict[str, int] = {
     "industry_history": 2,
     "industry_environment": 5,
     "industry_trends": 6,
-    "industry_supply_chain": 5,
+    "industry_supply_chain": 6,
 }
 
 SUPPLY_CHAIN_SUBTOPICS: List[str] = [
@@ -86,6 +88,9 @@ SUPPLY_CHAIN_SUBTOPICS: List[str] = [
 
 CHAPTER1_SPEC_MAP = {item["key"]: item for item in CHAPTER1_SECTION_SPECS}
 EXPECTED_CHAPTER1_SLOT_COUNT = sum(item["slot_count"] for item in CHAPTER1_SECTION_SPECS)
+OTHER_TEMPLATE_BASE_FIELD_COUNT = 49
+OTHER_TEMPLATE_ORIGINAL_CHAPTER1_SLOT_COUNT = 105
+OTHER_TEMPLATE_BODY_INDEX_DELTA = EXPECTED_CHAPTER1_SLOT_COUNT - OTHER_TEMPLATE_ORIGINAL_CHAPTER1_SLOT_COUNT
 PLACEHOLDER_TEXT = "该部分生成失败，请人工补充。"
 CHAPTER1_RETRY_GUIDANCE = "第一章暂未生成完成。系统会保留已成功内容，失败位置写入占位内容，并在接口返回调试回放文件路径。"
 CHAPTER1_DEBUG_REPLAY_DIR = Path("output/chapter1_replays")
@@ -992,7 +997,7 @@ def generate_other_docx(data: Dict[str, Any], template_path: str | Path, output_
     root = ET.fromstring(xml_content)
     metadata = _prepare_other_structure(root, layer_count=layer_count, company_count=company_count)
     field_count = _count_highlight_fields(root)
-    expected_field_count = 154 + 3 * layer_count + 20 * company_count
+    expected_field_count = OTHER_TEMPLATE_BASE_FIELD_COUNT + EXPECTED_CHAPTER1_SLOT_COUNT + 3 * layer_count + 20 * company_count
     if field_count != expected_field_count:
         raise OtherProofError(f"他证模板字段数量异常：期望 {expected_field_count}，实际 {field_count}")
 
@@ -1457,19 +1462,20 @@ def _prepare_other_structure(root: ET.Element, *, layer_count: int, company_coun
     if company_count < 1:
         raise OtherProofError("至少需要 1 家企业数据")
 
-    _apply_layer_structure(body, layer_count)
+    body_index_delta = OTHER_TEMPLATE_BODY_INDEX_DELTA
+    _apply_layer_structure(body, layer_count, body_index_delta=body_index_delta)
     layer_delta = _layer_child_delta(layer_count)
-    company_base_start = 201 + layer_delta
+    company_base_start = 201 + body_index_delta + layer_delta
     _apply_company_block_structure(body, company_base_start, company_count)
     company_delta = 7 * (company_count - 4)
-    comparison_table_index = 235 + layer_delta + company_delta
+    comparison_table_index = 235 + body_index_delta + layer_delta + company_delta
     _apply_comparison_table_structure(body, comparison_table_index, company_count)
 
-    layer_starts = _layer_start_indices(layer_count)
+    layer_starts = _layer_start_indices(layer_count, body_index_delta=body_index_delta)
     company_starts = [company_base_start + 7 * idx for idx in range(company_count)]
-    chart9_table_index = 242 + layer_delta + company_delta
-    chapter5_execution_index = 248 + layer_delta + company_delta
-    chapter5_links_anchor_index = 258 + layer_delta + company_delta
+    chart9_table_index = 242 + body_index_delta + layer_delta + company_delta
+    chapter5_execution_index = 248 + body_index_delta + layer_delta + company_delta
+    chapter5_links_anchor_index = 258 + body_index_delta + layer_delta + company_delta
     return {
         "layer_count": layer_count,
         "company_count": company_count,
@@ -1484,23 +1490,26 @@ def _prepare_other_structure(root: ET.Element, *, layer_count: int, company_coun
 
 
 
-def _apply_layer_structure(body: ET.Element, layer_count: int) -> None:
+def _apply_layer_structure(body: ET.Element, layer_count: int, *, body_index_delta: int = 0) -> None:
     children = list(body)
-    block2 = children[187:192]
-    block3 = children[192:199]
+    layer2_start = 187 + body_index_delta
+    layer3_start = 192 + body_index_delta
+    layer_end = 199 + body_index_delta
+    block2 = children[layer2_start:layer3_start]
+    block3 = children[layer3_start:layer_end]
 
     if layer_count == 1:
-        for elem in children[187:199]:
+        for elem in children[layer2_start:layer_end]:
             body.remove(elem)
         return
     if layer_count == 2:
-        for elem in children[192:199]:
+        for elem in children[layer3_start:layer_end]:
             body.remove(elem)
         return
     if layer_count == 3:
         return
 
-    insert_index = 199
+    insert_index = layer_end
     for _ in range(layer_count - 3):
         for elem in block3:
             body.insert(insert_index, copy.deepcopy(elem))
@@ -1517,15 +1526,15 @@ def _layer_child_delta(layer_count: int) -> int:
 
 
 
-def _layer_start_indices(layer_count: int) -> List[int]:
-    starts = [182]
+def _layer_start_indices(layer_count: int, *, body_index_delta: int = 0) -> List[int]:
+    starts = [182 + body_index_delta]
     if layer_count >= 2:
-        starts.append(187)
+        starts.append(187 + body_index_delta)
     if layer_count >= 3:
-        starts.append(192)
+        starts.append(192 + body_index_delta)
     if layer_count >= 4:
         for index in range(4, layer_count + 1):
-            starts.append(192 + 7 * (index - 3))
+            starts.append(192 + body_index_delta + 7 * (index - 3))
     return starts
 
 
@@ -2663,48 +2672,18 @@ def _sanitize_named_topic_paragraphs(
     return _merge_heading_like_paragraphs(cleaned)
 
 
-def _fit_topic_bucket_to_target(paragraphs: Sequence[str], target: int) -> List[str]:
-    fitted = [
-        _clean_chapter1_paragraph_text(item)
-        for item in paragraphs
-        if _clean_chapter1_paragraph_text(item) and not _is_chapter1_instruction_placeholder(item)
-    ]
-    if not fitted:
-        return [PLACEHOLDER_TEXT] * target
-
-    while len(fitted) < target:
-        idx = _find_best_split_index(fitted)
-        if idx is None:
-            break
-        left, right = _split_paragraph_for_template(fitted[idx])
-        if not left or not right:
-            break
-        fitted[idx:idx + 1] = [left, right]
-    if len(fitted) > target:
-        fitted = _merge_paragraphs_to_target(fitted, target)
-    if len(fitted) < target:
-        fitted.extend([PLACEHOLDER_TEXT] * (target - len(fitted)))
-    return fitted[:target]
-
-
 def _fit_supply_chain_paragraphs_to_slot_count(paragraphs: Sequence[str], title: str) -> tuple[List[str], List[str]]:
     warnings: List[str] = []
+    expected = CHAPTER1_SPEC_MAP["industry_supply_chain"]["slot_count"]
     cleaned = [
         _clean_chapter1_paragraph_text(item)
         for item in paragraphs
         if _clean_chapter1_paragraph_text(item) and not _is_chapter1_instruction_placeholder(item)
     ]
     if not cleaned:
-        return [PLACEHOLDER_TEXT] * CHAPTER1_SPEC_MAP["industry_supply_chain"]["slot_count"], [
-            f"第一章《{title}》未生成成功，已写入占位内容"
-        ]
+        return [PLACEHOLDER_TEXT] * expected, [f"第一章《{title}》未生成成功，已写入占位内容"]
 
-    intro = cleaned[0]
-    topic_buckets: List[List[str]] = [[] for _ in SUPPLY_CHAIN_SUBTOPICS]
-    body_paragraphs = cleaned[1:]
-    target_per_topic = [4, 3, 3, 2, 5]
-
-    def _guess_supply_chain_topic_index(text: str) -> int | None:
+    def guess_topic_index(text: str) -> int | None:
         normalized = str(text or "")
         rules = [
             (4, ["发展方向", "优化方向", "模块化", "标准化", "国产化", "生态协同"]),
@@ -2721,50 +2700,28 @@ def _fit_supply_chain_paragraphs_to_slot_count(paragraphs: Sequence[str], title:
                 return idx
         return None
 
+    intro = cleaned[0]
+    body_paragraphs = list(cleaned[1:])
     if len(body_paragraphs) == len(SUPPLY_CHAIN_SUBTOPICS):
-        guessed_order = [_guess_supply_chain_topic_index(text) for text in body_paragraphs]
-        if all(item is None for item in guessed_order) or guessed_order == list(range(len(SUPPLY_CHAIN_SUBTOPICS))):
-            for idx, text in enumerate(body_paragraphs):
-                topic_buckets[idx].append(_normalize_supply_chain_content(text, topic=SUPPLY_CHAIN_SUBTOPICS[idx]))
-            fitted_topics = [
-                _fit_topic_bucket_to_target(bucket, target)
-                for bucket, target in zip(topic_buckets, target_per_topic)
-            ]
-            result = [intro]
-            for bucket in fitted_topics:
-                result.extend(bucket)
-            return result, warnings
+        guessed_order = [guess_topic_index(text) for text in body_paragraphs]
+        if sorted(item for item in guessed_order if item is not None) == list(range(len(SUPPLY_CHAIN_SUBTOPICS))):
+            ordered = [body_paragraphs[index] for index, _topic_idx in sorted(enumerate(guessed_order), key=lambda item: item[1])]
+        else:
+            ordered = body_paragraphs
+        result = [intro] + [
+            _normalize_supply_chain_content(text, topic=SUPPLY_CHAIN_SUBTOPICS[idx])
+            for idx, text in enumerate(ordered)
+        ]
+    else:
+        result = [intro] + body_paragraphs
 
-    unassigned: List[str] = []
-    for text in body_paragraphs:
-        guessed = _guess_supply_chain_topic_index(text)
-        if guessed is None:
-            unassigned.append(text)
-            continue
-        topic = SUPPLY_CHAIN_SUBTOPICS[guessed]
-        topic_buckets[guessed].append(_normalize_supply_chain_content(text, topic=topic))
-
-    ordered_topic_idx = 0
-    for text in unassigned:
-        while (
-            ordered_topic_idx < len(topic_buckets) - 1
-            and len(topic_buckets[ordered_topic_idx]) >= target_per_topic[ordered_topic_idx]
-        ):
-            ordered_topic_idx += 1
-        topic = SUPPLY_CHAIN_SUBTOPICS[ordered_topic_idx]
-        topic_buckets[ordered_topic_idx].append(_normalize_supply_chain_content(text, topic=topic))
-
-    fitted_topics: List[List[str]] = []
-    for bucket, target in zip(topic_buckets, target_per_topic):
-        fitted_topics.append(_fit_topic_bucket_to_target(bucket, target))
-    result = [intro]
-    for bucket in fitted_topics:
-        result.extend(bucket)
-    if len(result) != CHAPTER1_SPEC_MAP["industry_supply_chain"]["slot_count"]:
-        warnings.append(f"第一章《{title}》段落结构异常，已自动回填占位")
-        expected = CHAPTER1_SPEC_MAP["industry_supply_chain"]["slot_count"]
-        result = (result + [PLACEHOLDER_TEXT] * expected)[:expected]
-    return result, warnings
+    if len(result) < expected:
+        warnings.append(f"第一章《{title}》段落不足，已补齐占位内容")
+        result.extend([PLACEHOLDER_TEXT] * (expected - len(result)))
+    if len(result) > expected:
+        warnings.append(f"第一章《{title}》段落较多，已自动合并后写入模板")
+        result = _merge_paragraphs_to_target(result, expected)
+    return result[:expected], warnings
 
 
 def _find_best_split_index(paragraphs: Sequence[str]) -> int | None:
@@ -3289,6 +3246,15 @@ def _build_chapter1_section_prompt(
     title = str(spec["title"])
     slot_count = int(spec.get("slot_count", 6))
     min_paragraphs = max(2, min(8, slot_count // 3))
+    if key == "industry_supply_chain":
+        paragraph_requirement = (
+            "paragraphs 必须正好 6 段：第 1 段为供应链总述；第 2 段为上游供应链；"
+            "第 3 段为中游制造与集成；第 4 段为下游应用与分销；"
+            "第 5 段为行业供应链的核心特征与面临的挑战；第 6 段为行业供应链的发展方向。"
+            "每段 180-260 字，正文里不要写（一）（二）或小标题。"
+        )
+    else:
+        paragraph_requirement = f"paragraphs 至少 {min_paragraphs} 段，每段 110-220 字，段落必须是完整陈述句。"
     chapter_outline = "\n".join(f"- {item['title']}" for item in CHAPTER1_SECTION_SPECS)
     context_excerpt = _build_chapter1_context_excerpt(generated_sections)
     style_constraints = _chapter1_style_constraints_text()
@@ -3303,7 +3269,7 @@ def _build_chapter1_section_prompt(
         "要求：\n"
         "1) 仅输出 JSON，不要输出解释，不要 Markdown。\n"
         f'2) JSON 格式固定为：{{"section":{{"key":"{key}","title":"{title}","paragraphs":["..."]}}}}。\n'
-        f"3) paragraphs 至少 {min_paragraphs} 段，每段 110-220 字，段落必须是完整陈述句。\n"
+        f"3) {paragraph_requirement}\n"
         "4) key/title/paragraphs/sections 只能作为 JSON 字段名出现，paragraphs 正文里不得出现这些词。\n"
         "5) 与已完成小节保持术语和叙述口径一致，行文必须可直接拼接。\n"
         f"{style_constraints}"
@@ -3316,10 +3282,16 @@ def _build_chapter1_repair_prompt(product_name: str, specs: Sequence[Dict[str, A
     for item in specs:
         slot_count = int(item["slot_count"])
         min_paragraphs = max(3, min(8, slot_count // 3))
-        lines.append(
-            f"- key={item['key']}，title={item['title']}：至少 {min_paragraphs} 段，每段 100-180 字，"
-            "段落应是完整陈述句。"
-        )
+        if str(item.get("key") or "").strip() == "industry_supply_chain":
+            lines.append(
+                f"- key={item['key']}，title={item['title']}：正好 6 段，依次为供应链总述、上游供应链、"
+                "中游制造与集成、下游应用与分销、核心特征与挑战、发展方向；每段 180-260 字。"
+            )
+        else:
+            lines.append(
+                f"- key={item['key']}，title={item['title']}：至少 {min_paragraphs} 段，每段 100-180 字，"
+                "段落应是完整陈述句。"
+            )
     requirements = "\n".join(lines)
     style_constraints = _chapter1_style_constraints_text()
     return (
@@ -3354,11 +3326,12 @@ def _build_chapter1_prompt(product_name: str) -> str:
         "（一）行业发展环境\n"
         "（二）行业发展趋势\n"
         "五、行业供应链\n"
-        "（一）上游原材料与核心零部件\n"
-        "（二）中游制造与装配环节\n"
-        "（三）下游应用行业与客户结构\n"
-        "（四）渠道流通与交付协同\n"
-        "（五）供应链风险与优化趋势\n"
+        "供应链总述\n"
+        "（一）上游供应链\n"
+        "（二）中游制造与集成\n"
+        "（三）下游应用与分销\n"
+        "（四）行业供应链的核心特征与面临的挑战\n"
+        "（五）行业供应链的发展方向\n"
         "\n"
         "为了写入模板，必须严格输出 JSON，结构如下：\n"
         '{"sections":[{"key":"background_overview","title":"背景与概述","paragraphs":["..."]}]}\n'
@@ -3368,8 +3341,8 @@ def _build_chapter1_prompt(product_name: str) -> str:
         "2. 每个 paragraphs 元素都必须是一段完整、连贯、正式的研究报告段落，禁止输出“总体工作原理”“机械自锁结构”这类孤立小标题或短语。\n"
         "3. 不要使用项目符号、清单式罗列、词条式拆分，也不要输出除 JSON 之外的任何文字。\n"
         "4. 内容必须是面向专业人士的行业研究报告写法，不要口语化，不要写企业私有数据，不要写“待补充”。\n"
-        "5. 每个一级部分至少 2 段；industry_trends 至少 4 段；industry_supply_chain 至少 6 段。\n"
-        "6. industry_supply_chain 必须包含“（一）到（五）”五个小分类，每个小分类至少 1 段，不得遗漏。\n"
+        "5. 每个一级部分至少 2 段；industry_trends 至少 4 段。\n"
+        "6. industry_supply_chain 必须正好 6 段，依次为供应链总述、上游供应链、中游制造与集成、下游应用与分销、核心特征与挑战、发展方向。\n"
     )
 
 
