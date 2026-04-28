@@ -5,6 +5,8 @@ import zipfile
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import pytest
+
 import app as app_module
 import chart_docx
 import other_proof
@@ -389,3 +391,57 @@ def test_rendered_chart_background_is_white_and_has_expected_bar_color():
     # Ensure at least one pixel uses the configured bar color.
     bar_color = (29, 100, 133)  # #1D6485
     assert bar_color in image.getdata()
+
+
+def test_rendered_chart_uses_template_like_bar_width_spacing_and_value_scale():
+    try:
+        from PIL import Image
+    except ImportError:
+        raise AssertionError("Pillow is required for chart rendering test")
+
+    values = (18.3, 20.0, 22.83)
+    image_bytes = chart_docx.render_market_chart_png(
+        chart_docx.ChartSeries(
+            values=values,
+            labels=("18.3", "20", "22.83"),
+        ),
+        canvas_size=(1600, 980),
+    )
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    bar_color = (29, 100, 133)
+
+    columns_with_bar = [
+        x
+        for x in range(image.width)
+        if any(image.getpixel((x, y)) == bar_color for y in range(image.height))
+    ]
+    runs: list[tuple[int, int]] = []
+    run_start = columns_with_bar[0]
+    previous = columns_with_bar[0]
+    for x in columns_with_bar[1:]:
+        if x == previous + 1:
+            previous = x
+            continue
+        runs.append((run_start, previous))
+        run_start = previous = x
+    runs.append((run_start, previous))
+
+    assert len(runs) == 3
+    widths = [end - start + 1 for start, end in runs]
+    centers = [(start + end) / 2 for start, end in runs]
+
+    assert all(140 <= width <= 150 for width in widths)
+    assert centers == pytest.approx([372.5, 842.5, 1312.5], abs=1.0)
+
+    low, high, _step = chart_docx._compute_y_axis(values)
+    for (start, end), value in zip(runs, values):
+        bar_pixels = [
+            y
+            for y in range(image.height)
+            for x in range(start, end + 1)
+            if image.getpixel((x, y)) == bar_color
+        ]
+        assert min(bar_pixels) == pytest.approx(
+            chart_docx._map_y(value, low, high, 72, 860),
+            abs=1,
+        )

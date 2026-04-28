@@ -117,14 +117,17 @@ def render_market_chart_png(series: ChartSeries, *, canvas_size: tuple[int, int]
     # Keep original visual proportions while scaling canvas for better Word clarity.
     scale_x = width / 1600
     scale_y = height / 980
-    left, right = int(170 * scale_x), int(width - 88 * scale_x)
+    left, right = int(138 * scale_x), int(width - 52 * scale_x)
     top, bottom = int(72 * scale_y), int(height - 120 * scale_y)
-    axis_color = "#c9c9c9"
-    tick_color = "#555555"
+    axis_color = "#d9d9d9"
+    tick_color = "#595959"
+    value_color = "#404040"
     bar_color = "#1D6485"
-    value_font = _load_heiti_font(ImageFont, max(16, int(52 * scale_y)))
-    x_font = _load_heiti_font(ImageFont, max(14, int(46 * scale_y)))
-    y_font = _load_heiti_font(ImageFont, max(12, int(40 * scale_y)))
+    font_size = max(16, int(round(38 * scale_y)))
+    value_font = _load_aptos_narrow_font(ImageFont, font_size)
+    x_font = _load_aptos_narrow_font(ImageFont, font_size)
+    x_cjk_font = _load_cjk_body_font(ImageFont, font_size)
+    y_font = _load_aptos_narrow_font(ImageFont, font_size)
 
     values = list(series.values)
     low, high, step = _compute_y_axis(values)
@@ -143,8 +146,8 @@ def render_market_chart_png(series: ChartSeries, *, canvas_size: tuple[int, int]
 
     years = ["2023年", "2024年", "2025年"]
     span = (right - left) / 3
-    bar_width = int(span * 0.4)
-    label_offset = max(int(18 * scale_y), int((bottom - top) * 0.03))
+    bar_width = int(span * 0.31)
+    label_offset = max(int(24 * scale_y), int((bottom - top) * 0.03))
 
     for i, value in enumerate(values):
         center_x = left + span * (i + 0.5)
@@ -161,14 +164,21 @@ def render_market_chart_png(series: ChartSeries, *, canvas_size: tuple[int, int]
         draw.text(
             (center_x - value_width / 2, y - value_height - label_offset),
             value_text,
-            fill="#444444",
+            fill=value_color,
             font=value_font,
         )
 
         year_text = years[i]
-        year_bbox = draw.textbbox((0, 0), year_text, font=x_font)
-        year_width = year_bbox[2] - year_bbox[0]
-        draw.text((center_x - year_width / 2, bottom + int(18 * scale_y)), year_text, fill=tick_color, font=x_font)
+        year_width, _year_height = _mixed_text_size(draw, year_text, latin_font=x_font, cjk_font=x_cjk_font)
+        _draw_mixed_text(
+            draw,
+            center_x - year_width / 2,
+            bottom + int(18 * scale_y),
+            year_text,
+            latin_font=x_font,
+            cjk_font=x_cjk_font,
+            fill=tick_color,
+        )
 
     out = BytesIO()
     image.save(out, format="PNG", dpi=(300, 300))
@@ -302,19 +312,45 @@ def _format_number_label(value: float) -> str:
     return text.rstrip("0").rstrip(".")
 
 
-def _load_heiti_font(image_font_module, size: int):
+def _load_aptos_narrow_font(image_font_module, size: int):
     candidates = [
+        "/Applications/Microsoft Word.app/Contents/Resources/DFonts/Aptos-Narrow.ttf",
+        "/Applications/Microsoft Excel.app/Contents/Resources/DFonts/Aptos-Narrow.ttf",
+        "/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/Aptos-Narrow.ttf",
+        "/Library/Fonts/Aptos-Narrow.ttf",
+        "/Library/Fonts/Aptos Narrow.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Narrow.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/STHeiti Medium.ttc",
         "/System/Library/Fonts/STHeiti Light.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Supplemental/SimHei.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     ]
+    return _load_first_available_font(image_font_module, candidates, size)
+
+
+def _load_cjk_body_font(image_font_module, size: int):
+    candidates = [
+        "/Applications/Microsoft Word.app/Contents/Resources/DFonts/SimHei.ttf",
+        "/Applications/Microsoft Excel.app/Contents/Resources/DFonts/SimHei.ttf",
+        "/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/SimHei.ttf",
+        "/Applications/Microsoft Word.app/Contents/Resources/DFonts/Deng.ttf",
+        "/Applications/Microsoft Excel.app/Contents/Resources/DFonts/Deng.ttf",
+        "/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/Deng.ttf",
+        "/Applications/Microsoft Word.app/Contents/Resources/DFonts/Simsun.ttc",
+        "/Applications/Microsoft Excel.app/Contents/Resources/DFonts/Simsun.ttc",
+        "/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/Simsun.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/Supplemental/Songti.ttc",
+    ]
+    return _load_first_available_font(image_font_module, candidates, size)
+
+
+def _load_first_available_font(image_font_module, candidates: Sequence[str], size: int):
     for font_path in candidates:
         try:
             return image_font_module.truetype(font_path, size=size)
@@ -324,6 +360,33 @@ def _load_heiti_font(image_font_module, size: int):
         return image_font_module.load_default(size=size)
     except TypeError:
         return image_font_module.load_default()
+
+
+def _font_for_char(char: str, *, latin_font, cjk_font):
+    return latin_font if ord(char) < 128 else cjk_font
+
+
+def _mixed_text_size(draw, text: str, *, latin_font, cjk_font) -> tuple[float, float]:
+    width = 0.0
+    height = 0.0
+    for char in text:
+        font = _font_for_char(char, latin_font=latin_font, cjk_font=cjk_font)
+        bbox = draw.textbbox((0, 0), char, font=font)
+        width += bbox[2] - bbox[0]
+        height = max(height, bbox[3] - bbox[1])
+    return width, height
+
+
+def _draw_mixed_text(draw, x: float, y: float, text: str, *, latin_font, cjk_font, fill: str) -> None:
+    cursor_x = x
+    _, text_height = _mixed_text_size(draw, text, latin_font=latin_font, cjk_font=cjk_font)
+    for char in text:
+        font = _font_for_char(char, latin_font=latin_font, cjk_font=cjk_font)
+        bbox = draw.textbbox((0, 0), char, font=font)
+        char_height = bbox[3] - bbox[1]
+        char_y = y + (text_height - char_height) / 2 - bbox[1]
+        draw.text((cursor_x, char_y), char, fill=fill, font=font)
+        cursor_x += bbox[2] - bbox[0]
 
 
 def _draw_bold_text(*, draw, x: float, y: float, text: str, font, fill: str) -> None:
