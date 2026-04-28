@@ -88,7 +88,7 @@ SUPPLY_CHAIN_SUBTOPICS: List[str] = [
 
 CHAPTER1_SPEC_MAP = {item["key"]: item for item in CHAPTER1_SECTION_SPECS}
 EXPECTED_CHAPTER1_SLOT_COUNT = sum(item["slot_count"] for item in CHAPTER1_SECTION_SPECS)
-OTHER_TEMPLATE_BASE_FIELD_COUNT = 49
+OTHER_TEMPLATE_BASE_FIELD_COUNT = 50
 OTHER_TEMPLATE_ORIGINAL_CHAPTER1_SLOT_COUNT = 105
 OTHER_TEMPLATE_BODY_INDEX_DELTA = EXPECTED_CHAPTER1_SLOT_COUNT - OTHER_TEMPLATE_ORIGINAL_CHAPTER1_SLOT_COUNT
 PLACEHOLDER_TEXT = "该部分生成失败，请人工补充。"
@@ -1429,6 +1429,7 @@ def _build_other_values(
             f"{self_share_23}、{self_share_24}、{self_share_25}",
             company_name,
             product_name,
+            scope_rank_plain,
             company_product,
             proof_scope,
             company_name,
