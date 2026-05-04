@@ -1351,7 +1351,7 @@
         "sale_23", "total_mkt_23", "pct_23", "rank_23",
         "sale_24", "total_mkt_24", "pct_24", "rank_24",
         "sale_25", "total_mkt_25", "pct_25", "rank_25",
-        "company_intro", "product_intro", "proof_scope", "market_name",
+        "company_intro", "product_intro", "target_scope", "proof_scope", "market_name",
       ];
       directFields.forEach((key) => {
         const el = document.getElementById(key);
@@ -1379,18 +1379,17 @@
       compBody.innerHTML = "";
       if (Array.isArray(data.competitors) && data.competitors.length) {
         data.competitors.forEach((c) => {
-          if (c.name) addCompetitorRow(c);
+          if (c.name) addCompetitorRow(c, { syncRows: false });
         });
       } else {
         addCompetitorRow();
       }
-      refreshCompetitorBoard();
+      refreshCompetitorBoard({ syncRows: false });
 
       // Template type
       document.getElementById("template_type").value = data.template_type || "self";
       toggleTemplateMode();
 
-      ["23", "24", "25"].forEach(calcMyPct);
       updateProgress();
     }
 
@@ -1927,8 +1926,9 @@
 
     function refreshCompetitorBoard(options = {}) {
       const sortRows = options.sortRows !== false;
+      const syncRows = options.syncRows !== false;
       ensureSelfCompetitorRow();
-      ["23", "24", "25"].forEach((year) => syncAllCompetitorRowsByYear(year));
+      if (syncRows) ["23", "24", "25"].forEach((year) => syncAllCompetitorRowsByYear(year));
       const rows = sortRows
         ? sortCompetitorRowsBy2025()
         : Array.from(document.querySelectorAll("#comp_table tbody tr"));
@@ -1971,7 +1971,7 @@
       saveDraft();
     }
 
-    function addCompetitorRow(prefill) {
+    function addCompetitorRow(prefill, options = {}) {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>
@@ -1991,7 +1991,7 @@
         <td><input class="c-r25" readonly /></td>
       `;
       document.getElementById("competitorBody").appendChild(tr);
-      refreshCompetitorBoard();
+      refreshCompetitorBoard({ syncRows: options.syncRows !== false });
     }
 
     function removeCompetitorRow(button) {
@@ -2618,7 +2618,9 @@
         return;
       }
 
-      const mergedIntro = [
+      const mergedIntro = templateType === "self"
+        ? companyIntro
+        : [
             companyIntro ? `企业介绍：${companyIntro}` : "",
             productIntro ? `产品介绍：${productIntro}` : "",
             proofScope ? `市场范围：${proofScope}` : "",

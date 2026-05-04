@@ -109,6 +109,76 @@ def test_generate_requires_template_type():
     assert any(item.get("loc", [])[-1] == "template_type" for item in detail)
 
 
+def test_extract_self_docx_uses_confirmed_docx_layout():
+    result = app_module._extract_self_docx_fields(app_module.TEMPLATE_PATH)
+
+    assert result["target_scope"] == "CN"
+    assert result["company_intro"].startswith("浙江达航数据技术有限公司成立于2021年")
+    assert result["product_intro"] == ""
+
+    first_source = result["sources"][0]
+    assert first_source["chart_title"] == "图表1 2023-2025年全球轨道交通电源系统行业市场规模（亿元）"
+    assert first_source["chart_2023"] == "21.01"
+    assert first_source["chart_2024"] == "22.78"
+    assert first_source["chart_2025"] == "24.70"
+    assert first_source["analysis"].startswith("根据 Railway Battery Management Systems Market")
+
+    second_source = result["sources"][1]
+    assert second_source["chart_2023"] == "4.01"
+    assert second_source["chart_2024"] == "4.35"
+    assert second_source["chart_2025"] == "4.72"
+
+    first_competitor = result["competitors"][0]
+    assert first_competitor == {
+        "name": "北京鼎汉技术集团股份有限公司",
+        "sale_23": "5798.20",
+        "p23": "14.46%",
+        "sale_24": "6398.23",
+        "p24": "14.71%",
+        "sale_25": "6978.65",
+        "p25": "14.79%",
+    }
+
+
+def test_extract_source_helpers_support_compact_confirmed_docx_values():
+    names = app_module._extract_numbered_source_lines(
+        "数据来源：1. 来源一2. 来源二3. GGII：2024年中国锂电池出货量近1.2TWh",
+        "数据来源",
+    )
+    urls = app_module._extract_numbered_source_lines(
+        "来源网址：1. https://example.com/a.html2. https://example.com/b.html",
+        "来源网址",
+    )
+    values = app_module._extract_market_values_yi(
+        "按此增长率推算，2023-2025年市场规模分别为26.00亿元、27.56亿元、29.21亿元。",
+        source_no=1,
+    )
+
+    assert names == ["来源一", "来源二", "GGII：2024年中国锂电池出货量近1.2TWh"]
+    assert urls == ["https://example.com/a.html", "https://example.com/b.html"]
+    assert values == ("26.00", "27.56", "29.21")
+
+
+def test_extract_final_docx_endpoint_returns_confirmed_layout():
+    client = TestClient(app_module.app)
+    with open(app_module.TEMPLATE_PATH, "rb") as fh:
+        resp = client.post(
+            "/api/extract-final-docx",
+            files={
+                "file": (
+                    Path(app_module.TEMPLATE_PATH).name,
+                    fh,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["target_scope"] == "CN"
+    assert body["sources"][0]["chart_2023"] == "21.01"
+
+
 def test_other_chapter1_endpoint_returns_sections(monkeypatch):
     client = TestClient(app_module.app)
 

@@ -149,6 +149,27 @@ def _write_run_text_with_breaks(run: ET.Element, text_value: str) -> None:
             ET.SubElement(run, f"{{{NS['w']}}}br")
 
 
+def _run_text_with_breaks(run: Optional[ET.Element]) -> str:
+    if run is None:
+        return ""
+    parts = []
+    for child in run.iter():
+        if child.tag == f"{{{NS['w']}}}t":
+            parts.append(child.text or "")
+        elif child.tag == f"{{{NS['w']}}}br":
+            parts.append("\n")
+    return "".join(parts)
+
+
+def _paragraph_text_with_breaks(paragraph: Optional[ET.Element]) -> str:
+    if paragraph is None:
+        return ""
+    return "".join(
+        _run_text_with_breaks(run)
+        for run in paragraph.iter(f"{{{NS['w']}}}r")
+    )
+
+
 def set_paragraph_text(p: ET.Element, value: str) -> None:
     runs = p.findall('./w:r', namespaces=NS)
     if not runs:
@@ -210,6 +231,158 @@ def _format_labeled_source_text(label: str, items: List[str]) -> str:
         return f"{label}：{items[0]}"
     numbered = _format_numbered_lines(items, always_number=True)
     return f"{label}：\n{numbered}"
+
+
+def _extract_numbered_source_lines(raw_text: str, label: str) -> List[str]:
+    text = str(raw_text or "").strip()
+    pattern = rf"^\s*{re.escape(label)}\s*[：:]\s*"
+    if not re.match(pattern, text):
+        raise ValueError(f"来源字段格式异常，未找到“{label}：”")
+    body = re.sub(pattern, "", text, count=1).strip()
+    if not body:
+        raise ValueError(f"来源字段格式异常，“{label}：”后没有内容")
+
+    marker_pattern = re.compile(r"(?<!\d)\d+[\.\、]\s+")
+    markers = list(marker_pattern.finditer(body))
+    if markers and markers[0].start() == 0:
+        values = []
+        for idx, marker in enumerate(markers):
+            next_start = markers[idx + 1].start() if idx + 1 < len(markers) else len(body)
+            value = body[marker.end():next_start].strip()
+            if value:
+                values.append(value)
+        if values:
+            return values
+
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    values = [re.sub(r"^\d+[\.\、]\s*", "", line).strip() for line in lines]
+    return [value for value in values if value]
+
+
+def _extract_market_values_yi(analysis_text: str, *, source_no: int) -> tuple[str, str, str]:
+    text = str(analysis_text or "")
+    match = re.search(r"分别为[：:]?\s*([^。；;\n]+)", text)
+    if not match:
+        raise ValueError(f"第 {source_no} 层来源正文缺少“分别为：...亿元、...亿元、...亿元”格式，无法填充图表数据")
+    values = re.findall(r"(\d+(?:\.\d+)?)\s*亿元", match.group(1))
+    if len(values) < 3:
+        raise ValueError(f"第 {source_no} 层来源正文未识别到 2023-2025 三个“亿元”数值")
+    return values[0], values[1], values[2]
+
+
+def _detect_self_target_scope(paragraphs: List[ET.Element]) -> str:
+    texts = [get_text(p).strip() for p in paragraphs]
+    for text in texts:
+        compact = re.sub(r"\s+", "", text)
+        if "全球细分市场规模" in compact or "全球市场规模" in compact:
+            return "GLOBAL"
+        if "全国细分市场规模" in compact or "国内细分市场规模" in compact or "中国细分市场规模" in compact:
+            return "CN"
+    raise ValueError("未在自证模板中识别到“全国/全球细分市场规模”，无法填充市场范围")
+
+
+def _previous_non_empty_paragraph_index(paragraphs: List[ET.Element], start_idx: int) -> Optional[int]:
+    for idx in range(start_idx, -1, -1):
+        if get_text(paragraphs[idx]).strip():
+            return idx
+    return None
+
+
+def _first_source_analysis_start(paragraphs: List[ET.Element], title_idx: int) -> int:
+    for idx in range(title_idx - 1, -1, -1):
+        text = get_text(paragraphs[idx]).strip()
+        if "细分市场规模" in text:
+            return idx + 1
+    raise ValueError("未识别到第一层来源正文起点")
+
+
+def _is_source_analysis_heading(text: str) -> bool:
+    compact = re.sub(r"\s+", "", str(text or ""))
+    return (
+        not compact
+        or compact.startswith("图表")
+        or compact.startswith("数据来源")
+        or compact.startswith("来源网址")
+        or compact.startswith(("一、", "二、", "三、", "（一）", "（二）", "(一)", "(二)"))
+    )
+
+
+def _extract_self_company_intro(paragraphs: List[ET.Element]) -> str:
+    start_idx = None
+    end_idx = None
+    for idx, paragraph in enumerate(paragraphs):
+        text = get_text(paragraph).strip()
+        if text == "我司主导产品市场占有率自证说明":
+            start_idx = idx
+            continue
+        if start_idx is not None and text.startswith("一、界定细分市场范围和市场规模"):
+            end_idx = idx
+            break
+
+    if start_idx is None or end_idx is None or end_idx <= start_idx:
+        raise ValueError("未识别到企业介绍的起止位置")
+
+    intro_parts = [
+        _paragraph_text_with_breaks(paragraph).strip()
+        for paragraph in paragraphs[start_idx + 1:end_idx]
+        if _paragraph_text_with_breaks(paragraph).strip()
+    ]
+    if not intro_parts:
+        raise ValueError("企业介绍为空，无法填充表单")
+    return "\n".join(intro_parts)
+
+
+def _extract_self_source_blocks(paragraphs: List[ET.Element]) -> List[dict]:
+    blocks = []
+    analysis_start_idx = None
+    for idx, paragraph in enumerate(paragraphs):
+        data_source_text = _paragraph_text_with_breaks(paragraph).strip()
+        if not re.match(r"^\s*数据来源\s*[：:]", data_source_text):
+            continue
+
+        if idx + 1 >= len(paragraphs):
+            raise ValueError(f"第 {len(blocks) + 1} 层来源缺少“来源网址”段落")
+        source_url_text = _paragraph_text_with_breaks(paragraphs[idx + 1]).strip()
+        if not re.match(r"^\s*来源网址\s*[：:]", source_url_text):
+            raise ValueError(f"第 {len(blocks) + 1} 层来源的“数据来源”后未找到“来源网址”段落")
+
+        title_idx = _previous_non_empty_paragraph_index(paragraphs, idx - 1)
+        if title_idx is None:
+            raise ValueError(f"第 {len(blocks) + 1} 层来源缺少图表标题")
+        if analysis_start_idx is None:
+            analysis_start_idx = _first_source_analysis_start(paragraphs, title_idx)
+
+        source_no = len(blocks) + 1
+        analysis_parts = []
+        for analysis_paragraph in paragraphs[analysis_start_idx:title_idx]:
+            analysis_text = _paragraph_text_with_breaks(analysis_paragraph).strip()
+            if _is_source_analysis_heading(analysis_text):
+                continue
+            analysis_parts.append(analysis_text)
+        if not analysis_parts:
+            raise ValueError(f"第 {source_no} 层来源缺少正文")
+        analysis = "\n".join(analysis_parts)
+        chart_title = _paragraph_text_with_breaks(paragraphs[title_idx]).strip()
+        chart_2023, chart_2024, chart_2025 = _extract_market_values_yi(analysis, source_no=source_no)
+
+        names_list = _extract_numbered_source_lines(data_source_text, "数据来源")
+        urls_list = _extract_numbered_source_lines(source_url_text, "来源网址")
+
+        blocks.append({
+            "name": names_list[0],
+            "names": names_list,
+            "url": urls_list[0],
+            "urls": urls_list,
+            "chart_title": chart_title,
+            "chart_2023": chart_2023,
+            "chart_2024": chart_2024,
+            "chart_2025": chart_2025,
+            "analysis": analysis,
+        })
+        analysis_start_idx = idx + 2
+    if not blocks:
+        raise ValueError("未识别到任何“数据来源：/来源网址：”来源层")
+    return blocks
 
 
 def _set_paragraph_alignment(paragraph: ET.Element, align: str) -> None:
@@ -945,27 +1118,11 @@ def _extract_self_docx_fields(uploaded_path: str) -> dict:
     up_tree = ET.fromstring(up_xml)
     up_paragraphs = list(up_tree.iter(f"{{{NS['w']}}}p"))
 
-    # 3. Detect how many source blocks exist in the uploaded document
-    src_count = 0
-    for p in up_paragraphs:
-        text = get_text(p).strip()
-        if text.startswith("数据来源："):
-            src_count += 1
+    # 3. Extract source blocks from the original template paragraph layout.
+    sources = _extract_self_source_blocks(up_paragraphs)
+    src_count = len(sources)
 
     TEMPLATE_SRC_COUNT = 2
-
-    def _run_text_with_breaks(run):
-        """Get text from a run, inserting \\n at each <w:br/> element."""
-        if run is None:
-            return ""
-        parts = []
-        for child in run.iter():
-            tag = child.tag
-            if tag == f"{{{NS['w']}}}t":
-                parts.append(child.text or "")
-            elif tag == f"{{{NS['w']}}}br":
-                parts.append("\n")
-        return "".join(parts)
 
     def _field_text(field_idx):
         """Return only the user-filled text for *field_idx* in the uploaded docx.
@@ -1066,93 +1223,14 @@ def _extract_self_docx_fields(uploaded_path: str) -> dict:
     result["month"] = month
     result["day"]   = day
 
-    intro_text = _field_text(19)
-    # Split intro into labeled sections
-    company_intro = ""
-    product_intro = ""
-    proof_scope = ""
-    market_name = ""
-    if intro_text:
-        # Try to parse labeled sections
-        remaining = intro_text
-        labels = ["市场名称：", "市场范围：", "产品介绍：", "企业介绍："]
-        extracted = {}
-        for label in labels:
-            if label in remaining:
-                parts = remaining.split(label, 1)
-                if len(parts) == 2:
-                    extracted[label] = parts[1]
-                    remaining = parts[0]
-                else:
-                    extracted[label] = ""
-            else:
-                extracted[label] = ""
-        # remaining now contains text before any label
-        # Assign to fields
-        company_intro = extracted.get("企业介绍：", "").strip()
-        product_intro = extracted.get("产品介绍：", "").strip()
-        proof_scope = extracted.get("市场范围：", "").strip()
-        market_name = extracted.get("市场名称：", "").strip()
-        # If no labels found at all, treat entire text as company intro
-        if not any(extracted.values()):
-            company_intro = intro_text.strip()
-    result["company_intro"] = company_intro
-    result["product_intro"] = product_intro
-    result["proof_scope"] = proof_scope
-    result["market_name"] = market_name
+    result["company_intro"] = _extract_self_company_intro(up_paragraphs)
+    result["product_intro"] = ""
+    result["proof_scope"] = ""
+    result["market_name"] = ""
+    result["target_scope"] = _detect_self_target_scope(up_paragraphs)
 
     # ---- Sources -------------------------------------------------------------
-    sources = []
-    for si in range(src_count):
-        base = 22 + si * 5
-        analysis    = _field_text(base)
-        chart_title = _field_text(base + 1)
-        # base + 2 is chart image placeholder (empty)
-        src_names   = _field_text(base + 3)
-        src_urls    = _field_text(base + 4)
-
-        # Strip "数据来源：" / "来源网址：" prefixes
-        if src_names.startswith("数据来源："):
-            src_names = src_names[len("数据来源："):].strip()
-        if src_urls.startswith("来源网址："):
-            src_urls = src_urls[len("来源网址："):].strip()
-
-        names_list = [n.strip() for n in src_names.split("\n") if n.strip()]
-        urls_list  = [u.strip() for u in src_urls.split("\n") if u.strip()]
-
-        # Deduplicate numbered prefixes for multi-line entries
-        def _strip_numbered_prefix(line: str) -> str:
-            return re.sub(r"^\d+[\.\、]\s*", "", line).strip()
-
-        names_list = [_strip_numbered_prefix(n) for n in names_list]
-        urls_list  = [_strip_numbered_prefix(u) for u in urls_list]
-
-        # Extract chart year values from analysis text or leave empty
-        chart_2023 = ""
-        chart_2024 = ""
-        chart_2025 = ""
-
-        sources.append({
-            "name": names_list[0] if names_list else "",
-            "names": names_list,
-            "url": urls_list[0] if urls_list else "",
-            "urls": urls_list,
-            "chart_title": chart_title,
-            "chart_2023": chart_2023,
-            "chart_2024": chart_2024,
-            "chart_2025": chart_2025,
-            "analysis": analysis,
-        })
     result["sources"] = sources
-
-    # ---- Post-source fields (skip product_name / sales_summary / formulas) ---
-    # Fields after sources: product_name → sales_summary → pct formulas → competitor names → company_name
-    base_after = 22 + 5 * src_count
-    # base_after + 0: product_name (already have)
-    # base_after + 1: sales_summary
-    # base_after + 2-4: pct formulas
-    # base_after + 5: competitor_names
-    # base_after + 6: company_name
 
     # ---- Competitors extracted from the sales table --------------------------
     body = up_tree.find(f".//{{{NS['w']}}}body")
