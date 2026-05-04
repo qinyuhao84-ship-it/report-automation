@@ -5,3 +5,4 @@ pytest
 httpx
 playwright
 Pillow
+python-multipart
