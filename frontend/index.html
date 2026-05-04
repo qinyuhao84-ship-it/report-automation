@@ -698,6 +698,102 @@
       .dock .template-mode { width: 100%; }
       .dock .template-mode select { flex: 1; }
     }
+
+    /* Upload modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 63, 51, 0.38);
+      backdrop-filter: blur(6px);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+
+    .modal-box {
+      background: var(--paper);
+      border-radius: 20px;
+      box-shadow: 0 20px 48px rgba(12, 46, 37, 0.18);
+      width: min(520px, calc(100% - 24px));
+      padding: 28px 24px 20px;
+      animation: enter 260ms ease-out;
+    }
+
+    .modal-box h3 {
+      margin: 0 0 6px;
+      font-size: 20px;
+    }
+
+    .modal-box .modal-sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+
+    .upload-zone {
+      border: 2px dashed #b9d3cb;
+      border-radius: 16px;
+      padding: 36px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 150ms, background 150ms;
+    }
+    .upload-zone.drag-over {
+      border-color: var(--brand);
+      background: var(--brand-soft);
+    }
+
+    .upload-zone .upload-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    .upload-zone .upload-hint {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .upload-file-name {
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--brand);
+    }
+
+    .upload-progress {
+      display: none;
+      margin-top: 12px;
+      font-size: 13px;
+      color: var(--brand);
+    }
+    .upload-progress.active { display: block; }
+
+    .upload-error {
+      display: none;
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--error);
+    }
+    .upload-error.active { display: block; }
+
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+
+    .final-badge {
+      display: inline-block;
+      background: #fef2e7;
+      color: #b05a19;
+      border: 1px solid #f5d5b0;
+      border-radius: 6px;
+      padding: 1px 7px;
+      font-size: 11px;
+      margin-left: 6px;
+    }
   </style>
 </head>
 <body>
@@ -716,6 +812,7 @@
             <select id="draftVersionSelect" onchange="onDraftVersionChange()"></select>
           </div>
           <button id="createVersionBtnTop" class="btn subtle top-btn top-create" type="button" onclick="onCreateVersionClick()">新建版本</button>
+          <button id="createFinalVersionBtnTop" class="btn subtle top-btn top-create" type="button" onclick="onCreateFinalVersionClick()" style="background:#fff7ea;color:#b05a19;border-color:#f5d5b0;">新建最终版本</button>
           <button id="saveDraftBtnTop" class="btn primary top-btn top-save" type="button" onclick="onSaveDraftClick()">保存版本</button>
         </div>
         <div class="top-actions-row top-actions-danger">
@@ -897,12 +994,34 @@
     </div>
   </div>
 
+  <!-- Final-version upload modal -->
+  <div class="modal-overlay" id="finalVersionModal">
+    <div class="modal-box">
+      <h3>新建最终版本</h3>
+      <p class="modal-sub">上传已确认的自证 .docx 文件，系统会自动提取内容并填写到表单中。</p>
+      <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+        <div class="upload-icon">📄</div>
+        <div>点击此处选择文件，或将 .docx 文件拖拽到此处</div>
+        <div class="upload-hint">仅支持 .docx 格式</div>
+        <div class="upload-file-name" id="uploadFileName"></div>
+      </div>
+      <input type="file" id="fileInput" accept=".docx" style="display:none" onchange="onFileSelected(this.files)" />
+      <div class="upload-progress" id="uploadProgress">⏳ 正在解析文件...</div>
+      <div class="upload-error" id="uploadError"></div>
+      <div class="modal-actions">
+        <button class="btn subtle" type="button" id="modalCancelBtn" onclick="closeFinalVersionModal()">取消</button>
+        <button class="btn primary" type="button" id="modalImportBtn" disabled onclick="onImportFinalDocx()">导入</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/frontend/draft_library.js"></script>
   <script>
     let sourceCount = 0;
     let autoSaveTimer = null;
     let lastSavedSnapshotText = "";
     let draftLibrary = null;
+    let selectedFinalDocxFile = null;
     let otherProofChapter1Sections = [];
     let otherProofChapter1ReplayFilePath = "";
     const OTHER_CHAPTER1_CACHE_KEY = "report_other_chapter1_by_company_v1";
@@ -1043,6 +1162,7 @@
       return {
         createCompany: document.getElementById("createCompanyBtnTop"),
         createVersion: document.getElementById("createVersionBtnTop"),
+        createFinalVersion: document.getElementById("createFinalVersionBtnTop"),
         saveVersion: document.getElementById("saveDraftBtnTop"),
         deleteVersion: document.getElementById("deleteVersionBtnTop"),
         deleteCompany: document.getElementById("deleteCompanyBtnTop"),
@@ -1063,6 +1183,10 @@
       if (buttons.createVersion) {
         buttons.createVersion.disabled = !hasCompany || !hasVersion || busyKeys.has("createVersion");
         buttons.createVersion.title = hasVersion ? "基于当前版本创建下一版" : "请先选择企业和版本";
+      }
+      if (buttons.createFinalVersion) {
+        buttons.createFinalVersion.disabled = !hasCompany || busyKeys.has("createFinalVersion");
+        buttons.createFinalVersion.title = hasCompany ? "上传最终确认的自证 .docx 并自动填充表单" : "请先选择企业";
       }
       if (buttons.saveVersion) {
         buttons.saveVersion.disabled = !hasCompany || !hasVersion || busyKeys.has("saveVersion");
@@ -1118,7 +1242,227 @@
     }
 
     function formatDraftEntryLabel(item) {
-      return `第${item.versionNo}版（${formatTimeStamp(item.savedTs)}）`;
+      const base = `第${item.versionNo}版`;
+      const finalMark = item.snapshot && item.snapshot.is_final ? " 【最终】" : "";
+      return `${base}${finalMark}（${formatTimeStamp(item.savedTs)}）`;
+    }
+
+    // ── Final-version modal ────────────────────────────────────────────
+
+    function onCreateFinalVersionClick() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，请刷新页面", "error");
+        return;
+      }
+      const companyName = document.getElementById("draftCompanySelect")?.value || "";
+      if (!companyName) {
+        setStatus("请先选择企业，再新建最终版本", "error");
+        return;
+      }
+      selectedFinalDocxFile = null;
+      document.getElementById("uploadFileName").textContent = "";
+      document.getElementById("uploadError").className = "upload-error";
+      document.getElementById("uploadProgress").className = "upload-progress";
+      document.getElementById("modalImportBtn").disabled = true;
+      document.getElementById("fileInput").value = "";
+      document.getElementById("uploadZone").classList.remove("drag-over");
+      document.getElementById("finalVersionModal").classList.add("open");
+    }
+
+    function closeFinalVersionModal() {
+      document.getElementById("finalVersionModal").classList.remove("open");
+      selectedFinalDocxFile = null;
+    }
+
+    function onFileSelected(files) {
+      const file = files && files[0];
+      const errEl = document.getElementById("uploadError");
+      errEl.className = "upload-error";
+      const importBtn = document.getElementById("modalImportBtn");
+
+      if (!file) {
+        selectedFinalDocxFile = null;
+        document.getElementById("uploadFileName").textContent = "";
+        importBtn.disabled = true;
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith(".docx")) {
+        errEl.textContent = "仅支持 .docx 文件，请重新选择";
+        errEl.className = "upload-error active";
+        importBtn.disabled = true;
+        return;
+      }
+      selectedFinalDocxFile = file;
+      document.getElementById("uploadFileName").textContent = file.name;
+      importBtn.disabled = false;
+    }
+
+    async function onImportFinalDocx() {
+      if (!selectedFinalDocxFile) return;
+      const importBtn = document.getElementById("modalImportBtn");
+      const cancelBtn = document.getElementById("modalCancelBtn");
+      const progressEl = document.getElementById("uploadProgress");
+      const errEl = document.getElementById("uploadError");
+
+      importBtn.disabled = true;
+      cancelBtn.disabled = true;
+      progressEl.className = "upload-progress active";
+      errEl.className = "upload-error";
+
+      try {
+        const formData = new FormData();
+        formData.append("file", selectedFinalDocxFile);
+
+        const resp = await fetch("/api/extract-final-docx", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!resp.ok) {
+          const detail = await resp.json().catch(() => ({}));
+          throw new Error(detail.detail || `服务器返回 ${resp.status}`);
+        }
+
+        const extracted = await resp.json();
+
+        closeFinalVersionModal();
+
+        // Fill form fields
+        fillFormFromExtractedData(extracted);
+
+        // Save as a new version marked as final
+        await saveAsFinalVersion(extracted);
+
+        setStatus("最终版本已导入并保存，请核对各字段内容");
+      } catch (err) {
+        errEl.textContent = err.message || "导入失败";
+        errEl.className = "upload-error active";
+      } finally {
+        progressEl.className = "upload-progress";
+        importBtn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    }
+
+    function fillFormFromExtractedData(data) {
+      // Direct field mappings
+      const directFields = [
+        "province", "company_name", "product_name", "product_code",
+        "sale_23", "total_mkt_23", "pct_23", "rank_23",
+        "sale_24", "total_mkt_24", "pct_24", "rank_24",
+        "sale_25", "total_mkt_25", "pct_25", "rank_25",
+        "company_intro", "product_intro",
+      ];
+      directFields.forEach((key) => {
+        const el = document.getElementById(key);
+        if (el && data[key] != null) el.value = data[key];
+      });
+
+      // Date fields
+      if (data.year) document.getElementById("year").value = String(data.year);
+      if (data.month) document.getElementById("month").value = String(data.month);
+      if (data.day) document.getElementById("day").value = String(data.day);
+
+      // Sources
+      const sourceHolder = document.getElementById("sources_list");
+      sourceHolder.innerHTML = "";
+      sourceCount = 0;
+      if (Array.isArray(data.sources) && data.sources.length) {
+        data.sources.forEach((s) => addSource(s));
+      } else {
+        addSource();
+      }
+      syncBusinessMarketScaleFromSources();
+
+      // Competitors
+      const compBody = document.getElementById("competitorBody");
+      compBody.innerHTML = "";
+      if (Array.isArray(data.competitors) && data.competitors.length) {
+        data.competitors.forEach((c) => {
+          if (c.name) addCompetitorRow(c);
+        });
+      } else {
+        addCompetitorRow();
+      }
+      refreshCompetitorBoard();
+
+      // Template type
+      document.getElementById("template_type").value = data.template_type || "self";
+      toggleTemplateMode();
+
+      ["23", "24", "25"].forEach(calcMyPct);
+      updateProgress();
+    }
+
+    async function saveAsFinalVersion(extractedData) {
+      if (!draftLibrary) return;
+
+      const companyName = document.getElementById("draftCompanySelect")?.value || "";
+      if (!companyName) {
+        setStatus("最终版本数据已填入表单，但未能自动保存（未选择企业）", "error");
+        return;
+      }
+
+      // Build snapshot from current form state (already filled)
+      const snapshot = buildDraftSnapshot(false);
+      snapshot.is_final = true;
+
+      const nextVersionNo = await draftLibrary.getNextVersionNo(companyName);
+      snapshot.saved_mode = "version";
+      snapshot.saved_version_no = nextVersionNo;
+
+      try {
+        await draftLibrary.saveVersionDraft(companyName, nextVersionNo, snapshot, Number(snapshot.saved_ts) || Date.now());
+      } catch (err) {
+        setStatus(`最终版本保存失败：${err.message || "IndexedDB 写入失败"}`, "error");
+        return;
+      }
+
+      try {
+        lastSavedSnapshotText = JSON.stringify(snapshot);
+      } catch (_e) {
+        lastSavedSnapshotText = "";
+      }
+
+      await refreshDraftPickers(companyName, `version:${nextVersionNo}`);
+      await loadDraft(true);
+      updateDraftMeta(`${companyName} 第${nextVersionNo}版【最终】已创建`);
+    }
+
+    // ── Drag-and-drop support ─────────────────────────────────────────
+
+    function setupUploadDragDrop() {
+      const zone = document.getElementById("uploadZone");
+      if (!zone) return;
+
+      zone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        zone.classList.add("drag-over");
+      });
+      zone.addEventListener("dragleave", () => {
+        zone.classList.remove("drag-over");
+      });
+      zone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        zone.classList.remove("drag-over");
+        const files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files.length) {
+          document.getElementById("fileInput").files = files;
+          onFileSelected(files);
+        }
+      });
+      // Close modal on overlay click
+      document.getElementById("finalVersionModal").addEventListener("click", (e) => {
+        if (e.target === document.getElementById("finalVersionModal")) {
+          closeFinalVersionModal();
+        }
+      });
+      // Close modal on Escape
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && document.getElementById("finalVersionModal").classList.contains("open")) {
+          closeFinalVersionModal();
+        }
+      });
     }
 
     function getSelectedVersionTarget() {
@@ -2823,6 +3167,7 @@
       refreshCompetitorBoard();
       bindAutoSave();
       bindDraftHotkeys();
+      setupUploadDragDrop();
       toggleTemplateMode();
       updateProgress();
 

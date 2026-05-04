@@ -6,8 +6,8 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 import copy
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 import uvicorn
@@ -892,6 +892,274 @@ def _rewrite_self_dynamic_chart_references(tree: ET.Element, *, source_count: in
             updated = re.sub(r"^图表\s*\d+", f"图表 {share_chart_no}", text, count=1)
             set_paragraph_text(p, updated)
 
+def _extract_self_docx_fields(uploaded_path: str) -> dict:
+    """Reverse-engineer a filled self-proof .docx back into form fields.
+
+    Maps the template's yellow-highlighted runs onto corresponding runs in
+    the uploaded document to extract only the user-filled values (not the
+    surrounding static template text).
+    """
+
+    # 1. Build field-index → (paragraph_index, [run_indices]) from the template
+    with zipfile.ZipFile(TEMPLATE_PATH, 'r') as z:
+        tmpl_xml = z.read("word/document.xml")
+    register_all_namespaces(tmpl_xml)
+    tmpl_tree = ET.fromstring(tmpl_xml)
+
+    # field_info[field_idx] = (paragraph_index, [run_index, ...])
+    field_info = {}
+    p_idx = -1
+    cur = 0
+    for p in tmpl_tree.iter(f"{{{NS['w']}}}p"):
+        p_idx += 1
+        runs = p.findall('./w:r', namespaces=NS)
+        curr_field_run_indices = []
+        r_idx = -1
+        for r in runs:
+            r_idx += 1
+            if is_yellow_run(r):
+                curr_field_run_indices.append(r_idx)
+            else:
+                if curr_field_run_indices:
+                    field_info[cur] = (p_idx, tuple(curr_field_run_indices))
+                    cur += 1
+                curr_field_run_indices = []
+        if curr_field_run_indices:
+            field_info[cur] = (p_idx, tuple(curr_field_run_indices))
+            cur += 1
+
+    # 2. Parse uploaded docx
+    with zipfile.ZipFile(uploaded_path, 'r') as z:
+        up_xml = z.read("word/document.xml")
+
+    register_all_namespaces(up_xml)
+    up_tree = ET.fromstring(up_xml)
+    up_paragraphs = list(up_tree.iter(f"{{{NS['w']}}}p"))
+
+    # 3. Detect how many source blocks exist in the uploaded document
+    src_count = 0
+    for p in up_paragraphs:
+        text = get_text(p).strip()
+        if text.startswith("数据来源："):
+            src_count += 1
+
+    TEMPLATE_SRC_COUNT = 2
+
+    def _field_text(field_idx):
+        """Return only the user-filled text for *field_idx* in the uploaded docx.
+
+        Extracts text exclusively from the runs that correspond to
+        yellow-highlighted runs in the template, ignoring static text.
+        """
+        if field_idx < 22:
+            # Fixed preamble — paragraph index is the same
+            info = field_info.get(field_idx)
+            if info is None:
+                return ""
+            tmpl_p_idx, run_indices = info
+            target_p_idx = tmpl_p_idx
+        elif field_idx < 22 + 5 * src_count:
+            # Inside dynamically-scaled source blocks.
+            # For sources beyond the template's native source count we
+            # reuse the first source block's run indices and offset the
+            # paragraph index.
+            source_no = (field_idx - 22) // 5
+            slot = (field_idx - 22) % 5
+            ref_info = field_info.get(22 + slot)
+            if ref_info is None:
+                return ""
+            ref_p_idx, run_indices = ref_info
+            target_p_idx = ref_p_idx + source_no * 5
+        else:
+            # Fields after source blocks — shift by (src_count - 2) * 5
+            info = field_info.get(field_idx)
+            if info is None:
+                return ""
+            tmpl_p_idx, run_indices = info
+            shift = (src_count - TEMPLATE_SRC_COUNT) * 5
+            target_p_idx = tmpl_p_idx + shift
+
+        if target_p_idx < 0 or target_p_idx >= len(up_paragraphs):
+            return ""
+
+        up_p = up_paragraphs[target_p_idx]
+        up_runs = up_p.findall('./w:r', namespaces=NS)
+
+        parts = []
+        for ri in run_indices:
+            if ri < len(up_runs):
+                parts.append(get_text(up_runs[ri]))
+        return "".join(parts).strip()
+
+    # 5. Extract each high-level value
+    result = {}
+
+    # ---- Fixed 0-15 ----------------------------------------------------------
+    result["province"]     = _field_text(0)
+    result["company_name"] = _field_text(1)
+    result["product_name"] = _field_text(2)
+    result["product_code"] = _field_text(3)
+    result["sale_23"]      = _field_text(4)
+    result["total_mkt_23"] = _field_text(5)
+    result["pct_23"]       = _field_text(6)
+    result["rank_23"]      = _field_text(7)
+    result["sale_24"]      = _field_text(8)
+    result["total_mkt_24"] = _field_text(9)
+    result["pct_24"]       = _field_text(10)
+    result["rank_24"]      = _field_text(11)
+    result["sale_25"]      = _field_text(12)
+    result["total_mkt_25"] = _field_text(13)
+    result["pct_25"]       = _field_text(14)
+    result["rank_25"]      = _field_text(15)
+
+    # ---- Intro source names (16) & empty (17) --------------------------------
+    _ = _field_text(16)  # intro source names — not needed for reverse
+    _ = _field_text(17)
+
+    # ---- Report date (18), intro (19), product_name (20), product_code (21) --
+    date_text = _field_text(18)
+    year = month = day = ""
+    date_match = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", date_text)
+    if date_match:
+        year = date_match.group(1)
+        month = date_match.group(2)
+        day = date_match.group(3)
+    result["year"]  = year
+    result["month"] = month
+    result["day"]   = day
+
+    intro_text = _field_text(19)
+    # Split intro into company_intro / product_intro when possible
+    company_intro = ""
+    product_intro = ""
+    if intro_text:
+        if "企业介绍：" in intro_text and "产品介绍：" in intro_text:
+            parts = intro_text.split("产品介绍：", 1)
+            company_intro = parts[0].replace("企业介绍：", "").strip()
+            product_intro = parts[1].strip()
+        else:
+            company_intro = intro_text
+    result["company_intro"] = company_intro
+    result["product_intro"] = product_intro
+
+    # ---- Sources -------------------------------------------------------------
+    sources = []
+    for si in range(src_count):
+        base = 22 + si * 5
+        analysis    = _field_text(base)
+        chart_title = _field_text(base + 1)
+        # base + 2 is chart image placeholder (empty)
+        src_names   = _field_text(base + 3)
+        src_urls    = _field_text(base + 4)
+
+        # Strip "数据来源：" / "来源网址：" prefixes
+        if src_names.startswith("数据来源："):
+            src_names = src_names[len("数据来源："):].strip()
+        if src_urls.startswith("来源网址："):
+            src_urls = src_urls[len("来源网址："):].strip()
+
+        names_list = [n.strip() for n in src_names.split("\n") if n.strip()]
+        urls_list  = [u.strip() for u in src_urls.split("\n") if u.strip()]
+
+        # Deduplicate numbered prefixes for multi-line entries
+        def _strip_numbered_prefix(line: str) -> str:
+            return re.sub(r"^\d+[\.\、]\s*", "", line).strip()
+
+        names_list = [_strip_numbered_prefix(n) for n in names_list]
+        urls_list  = [_strip_numbered_prefix(u) for u in urls_list]
+
+        # Extract chart year values from analysis text or leave empty
+        chart_2023 = ""
+        chart_2024 = ""
+        chart_2025 = ""
+
+        sources.append({
+            "name": names_list[0] if names_list else "",
+            "names": names_list,
+            "url": urls_list[0] if urls_list else "",
+            "urls": urls_list,
+            "chart_title": chart_title,
+            "chart_2023": chart_2023,
+            "chart_2024": chart_2024,
+            "chart_2025": chart_2025,
+            "analysis": analysis,
+        })
+    result["sources"] = sources
+
+    # ---- Post-source fields (skip product_name / sales_summary / formulas) ---
+    # Fields after sources: product_name → sales_summary → pct formulas → competitor names → company_name
+    base_after = 22 + 5 * src_count
+    # base_after + 0: product_name (already have)
+    # base_after + 1: sales_summary
+    # base_after + 2-4: pct formulas
+    # base_after + 5: competitor_names
+    # base_after + 6: company_name
+
+    # ---- Competitors extracted from the sales table --------------------------
+    body = up_tree.find(f".//{{{NS['w']}}}body")
+    all_competitors = _extract_competitors_from_self_table(body)
+
+    # The first row in the sales table is the self company — exclude it
+    company_name = result.get("company_name", "")
+    competitors = [
+        c for c in all_competitors
+        if c.get("name", "").strip() != company_name.strip()
+    ]
+
+    result["competitors"] = competitors
+
+    # ---- Template type is always self ----------------------------------------
+    result["template_type"] = "self"
+
+    return result
+
+
+def _extract_competitors_from_self_table(body) -> list:
+    """Extract competitor rows from the self-proof sales table."""
+    if body is None:
+        return []
+
+    target_table = None
+    for child in list(body):
+        if child.tag != f"{{{NS['w']}}}tbl":
+            continue
+        rows = child.findall("./w:tr", namespaces=NS)
+        if len(rows) < 3:
+            continue
+        first_row_text = "".join(t.text or "" for t in rows[0].findall(".//w:t", namespaces=NS))
+        second_row_text = "".join(t.text or "" for t in rows[1].findall(".//w:t", namespaces=NS))
+        if "企业名称" in first_row_text and "2023年" in first_row_text and "销售额（万元）" in second_row_text:
+            target_table = child
+            break
+
+    if target_table is None:
+        return []
+
+    rows = target_table.findall("./w:tr", namespaces=NS)
+    data_rows = rows[2:]  # skip two header rows
+
+    competitors = []
+    for row in data_rows:
+        cells = row.findall("./w:tc", namespaces=NS)
+        if not cells:
+            continue
+        name = get_text(cells[0]).strip()
+        if not name:
+            continue
+        competitor = {"name": name}
+        # Cells are: name, sale_23, pct_23, rank_23, sale_24, pct_24, rank_24, sale_25, pct_25, rank_25
+        if len(cells) >= 10:
+            competitor["sale_23"] = get_text(cells[1]).strip()
+            competitor["p23"]    = get_text(cells[2]).strip()
+            competitor["sale_24"] = get_text(cells[4]).strip()
+            competitor["p24"]    = get_text(cells[5]).strip()
+            competitor["sale_25"] = get_text(cells[7]).strip()
+            competitor["p25"]    = get_text(cells[8]).strip()
+        competitors.append(competitor)
+
+    return competitors
+
+
 app = FastAPI()
 
 # 添加CORS中间件
@@ -983,6 +1251,38 @@ def generate_api(data: DataModel):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/extract-final-docx")
+async def extract_final_docx(file: UploadFile = File(...)):
+    """Extract form fields from an uploaded self-proof .docx.
+
+    Accepts a previously-generated self-proof document, reverse-maps the
+    template field positions onto it, and returns the extracted data as
+    JSON suitable for pre-filling the frontend form.
+    """
+    suffix = Path(file.filename).suffix.lower() if file.filename else ""
+    if suffix not in (".docx",):
+        raise HTTPException(status_code=400, detail="仅支持 .docx 文件")
+
+    tmp_path = Path(f"upload_{os.getpid()}_{os.urandom(4).hex()}.docx")
+    try:
+        contents = await file.read()
+        tmp_path.write_bytes(contents)
+
+        result = _extract_self_docx_fields(str(tmp_path))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="文件损坏，无法作为 .docx 打开")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"解析失败：{exc}")
+    finally:
+        if tmp_path.exists():
+            try:
+                os.remove(str(tmp_path))
+            except OSError:
+                pass
+
+    return JSONResponse(content=result)
+
 
 @app.get("/")
 def index():
