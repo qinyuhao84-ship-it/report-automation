@@ -1351,7 +1351,7 @@
         "sale_23", "total_mkt_23", "pct_23", "rank_23",
         "sale_24", "total_mkt_24", "pct_24", "rank_24",
         "sale_25", "total_mkt_25", "pct_25", "rank_25",
-        "company_intro", "product_intro",
+        "company_intro", "product_intro", "proof_scope", "market_name",
       ];
       directFields.forEach((key) => {
         const el = document.getElementById(key);
@@ -2604,6 +2604,8 @@
       const product = document.getElementById("product_name").value.trim();
       const companyIntro = document.getElementById("company_intro").value.trim();
       const productIntro = document.getElementById("product_intro").value.trim();
+      const proofScope = document.getElementById("proof_scope").value.trim();
+      const marketName = document.getElementById("market_name").value.trim();
       const templateType = document.getElementById("template_type").value;
       const sources = collectSources(false);
       const sourceCheck = validateSourceChartData(sources, "数据来源");
@@ -2616,11 +2618,11 @@
         return;
       }
 
-      const mergedIntro = templateType === "self"
-        ? companyIntro
-        : [
+      const mergedIntro = [
             companyIntro ? `企业介绍：${companyIntro}` : "",
             productIntro ? `产品介绍：${productIntro}` : "",
+            proofScope ? `市场范围：${proofScope}` : "",
+            marketName ? `市场名称：${marketName}` : "",
           ].filter(Boolean).join("\n\n");
 
       const effectiveMarket23 = resolveEffectiveMarketScale("23", sources);
@@ -2666,9 +2668,11 @@
       const activeVersionTarget = getSelectedVersionTarget();
       data.version_no = activeVersionTarget && Number.isInteger(activeVersionTarget.versionNo) ? activeVersionTarget.versionNo : 1;
 
+      data.company_intro_text = companyIntro;
+      data.proof_scope = proofScope;
+      data.market_name = marketName;
+
       if (templateType === "other") {
-        const proofScope = document.getElementById("proof_scope").value.trim();
-        const marketName = document.getElementById("market_name").value.trim();
         if (!companyIntro) {
           setStatus("他证报告必须填写企业介绍", "error");
           return;
@@ -2707,9 +2711,6 @@
           return;
         }
 
-        data.company_intro_text = companyIntro;
-        data.proof_scope = proofScope;
-        data.market_name = marketName;
         data.chapter2_layers = otherLayerPlan.layers;
         data.chapter1_sections = otherProofChapter1Sections;
         data.chapter1_replay_file_path = otherProofChapter1ReplayFilePath;

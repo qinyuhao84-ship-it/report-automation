@@ -691,7 +691,7 @@ def generate_docx_v4(data: dict, template_path, output_path):
     )
     rewrite_summary_market_research_phrase(tree, str(data.get("product_name", "")).strip())
     _rewrite_self_dynamic_chart_references(tree, source_count=num_sources)
-    _rewrite_self_opening_requirement_sentence(tree)
+    _rewrite_self_opening_requirement_sentence(tree, str(data.get("province", "")))
     _center_self_summary_table_cells(tree)
     _left_align_self_summary_source_cells(tree)
     _bold_self_company_row_in_sales_table(tree, company_name=str(data.get("company_name", "")).strip())
@@ -747,12 +747,21 @@ def _apply_self_sales_table_structure(body: ET.Element, *, company_total: int) -
             target_table.append(copy.deepcopy(template_row))
 
 
-def _rewrite_self_opening_requirement_sentence(tree: ET.Element) -> None:
+def _rewrite_self_opening_requirement_sentence(tree: ET.Element, province: str = "") -> None:
     for p in tree.findall(f".//{{{NS['w']}}}p"):
         text = get_text(p)
         if "根据" not in text or "申报工作要求" not in text:
             continue
-        updated = re.sub(r"根据.*?申报工作要求", "根据申报工作要求", text, count=1)
+        province_part = ""
+        if province.strip():
+            province_part = province.strip()
+            # Add 省/市 suffix if not already present
+            if not province_part.endswith(("省", "市", "自治区")):
+                province_part += "省"
+        if province_part:
+            updated = re.sub(r"根据.*?申报工作要求", f"根据{province_part}申报工作要求", text, count=1)
+        else:
+            updated = re.sub(r"根据.*?申报工作要求", "根据申报工作要求", text, count=1)
         if updated == text:
             continue
         set_paragraph_text(p, updated)
@@ -945,6 +954,19 @@ def _extract_self_docx_fields(uploaded_path: str) -> dict:
 
     TEMPLATE_SRC_COUNT = 2
 
+    def _run_text_with_breaks(run):
+        """Get text from a run, inserting \\n at each <w:br/> element."""
+        if run is None:
+            return ""
+        parts = []
+        for child in run.iter():
+            tag = child.tag
+            if tag == f"{{{NS['w']}}}t":
+                parts.append(child.text or "")
+            elif tag == f"{{{NS['w']}}}br":
+                parts.append("\n")
+        return "".join(parts)
+
     def _field_text(field_idx):
         """Return only the user-filled text for *field_idx* in the uploaded docx.
 
@@ -988,14 +1010,30 @@ def _extract_self_docx_fields(uploaded_path: str) -> dict:
         parts = []
         for ri in run_indices:
             if ri < len(up_runs):
-                parts.append(get_text(up_runs[ri]))
+                parts.append(_run_text_with_breaks(up_runs[ri]))
         return "".join(parts).strip()
 
     # 5. Extract each high-level value
     result = {}
 
     # ---- Fixed 0-15 ----------------------------------------------------------
-    result["province"]     = _field_text(0)
+    # Province (field 0) may have been merged into the opening sentence by
+    # _rewrite_self_opening_requirement_sentence, so try to extract it from
+    # the full paragraph text first.
+    prov_info = field_info.get(0)
+    if prov_info:
+        prov_p_idx = prov_info[0]
+        if prov_p_idx < len(up_paragraphs):
+            prov_para_text = get_text(up_paragraphs[prov_p_idx])
+            prov_match = re.search(r"根据(.+?)(?:省|市|自治区)申报工作要求", prov_para_text)
+            if prov_match:
+                result["province"] = prov_match.group(1).strip()
+            else:
+                result["province"] = _field_text(0)
+        else:
+            result["province"] = _field_text(0)
+    else:
+        result["province"] = _field_text(0)
     result["company_name"] = _field_text(1)
     result["product_name"] = _field_text(2)
     result["product_code"] = _field_text(3)
@@ -1029,18 +1067,39 @@ def _extract_self_docx_fields(uploaded_path: str) -> dict:
     result["day"]   = day
 
     intro_text = _field_text(19)
-    # Split intro into company_intro / product_intro when possible
+    # Split intro into labeled sections
     company_intro = ""
     product_intro = ""
+    proof_scope = ""
+    market_name = ""
     if intro_text:
-        if "企业介绍：" in intro_text and "产品介绍：" in intro_text:
-            parts = intro_text.split("产品介绍：", 1)
-            company_intro = parts[0].replace("企业介绍：", "").strip()
-            product_intro = parts[1].strip()
-        else:
-            company_intro = intro_text
+        # Try to parse labeled sections
+        remaining = intro_text
+        labels = ["市场名称：", "市场范围：", "产品介绍：", "企业介绍："]
+        extracted = {}
+        for label in labels:
+            if label in remaining:
+                parts = remaining.split(label, 1)
+                if len(parts) == 2:
+                    extracted[label] = parts[1]
+                    remaining = parts[0]
+                else:
+                    extracted[label] = ""
+            else:
+                extracted[label] = ""
+        # remaining now contains text before any label
+        # Assign to fields
+        company_intro = extracted.get("企业介绍：", "").strip()
+        product_intro = extracted.get("产品介绍：", "").strip()
+        proof_scope = extracted.get("市场范围：", "").strip()
+        market_name = extracted.get("市场名称：", "").strip()
+        # If no labels found at all, treat entire text as company intro
+        if not any(extracted.values()):
+            company_intro = intro_text.strip()
     result["company_intro"] = company_intro
     result["product_intro"] = product_intro
+    result["proof_scope"] = proof_scope
+    result["market_name"] = market_name
 
     # ---- Sources -------------------------------------------------------------
     sources = []
@@ -1147,14 +1206,14 @@ def _extract_competitors_from_self_table(body) -> list:
         if not name:
             continue
         competitor = {"name": name}
-        # Cells are: name, sale_23, pct_23, rank_23, sale_24, pct_24, rank_24, sale_25, pct_25, rank_25
-        if len(cells) >= 10:
+        # Cells are: name, sale_23, pct_23, sale_24, pct_24, sale_25, pct_25 (7 cells per row)
+        if len(cells) >= 7:
             competitor["sale_23"] = get_text(cells[1]).strip()
             competitor["p23"]    = get_text(cells[2]).strip()
-            competitor["sale_24"] = get_text(cells[4]).strip()
-            competitor["p24"]    = get_text(cells[5]).strip()
-            competitor["sale_25"] = get_text(cells[7]).strip()
-            competitor["p25"]    = get_text(cells[8]).strip()
+            competitor["sale_24"] = get_text(cells[3]).strip()
+            competitor["p24"]    = get_text(cells[4]).strip()
+            competitor["sale_25"] = get_text(cells[5]).strip()
+            competitor["p25"]    = get_text(cells[6]).strip()
         competitors.append(competitor)
 
     return competitors
