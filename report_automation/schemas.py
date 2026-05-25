@@ -4,6 +4,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+
 class SourceBlock(BaseModel):
     name: str
     url: str
@@ -14,6 +15,7 @@ class SourceBlock(BaseModel):
     chart_2023: str = ""
     chart_2024: str = ""
     chart_2025: str = ""
+
 
 class Competitor(BaseModel):
     name: str
@@ -66,6 +68,7 @@ class Chapter1SectionRequest(BaseModel):
 class CompanyLookupRequest(BaseModel):
     companies: List[CompanyLookupItem]
 
+
 class DataModel(BaseModel):
     template_type: Literal["self", "other"]
     province: str
@@ -76,9 +79,18 @@ class DataModel(BaseModel):
     month: str
     day: str
     intro: str
-    sale_23: str; total_mkt_23: str; pct_23: str; rank_23: str
-    sale_24: str; total_mkt_24: str; pct_24: str; rank_24: str
-    sale_25: str; total_mkt_25: str; pct_25: str; rank_25: str
+    sale_23: str
+    total_mkt_23: str
+    pct_23: str
+    rank_23: str
+    sale_24: str
+    total_mkt_24: str
+    pct_24: str
+    rank_24: str
+    sale_25: str
+    total_mkt_25: str
+    pct_25: str
+    rank_25: str
     sources: List[SourceBlock]
     competitors: List[Competitor]
     company_intro_text: Optional[str] = None

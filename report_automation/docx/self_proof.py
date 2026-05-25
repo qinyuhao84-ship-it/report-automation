@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import copy
 import re
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 from typing import List, Optional
 
 from report_automation.docx.charts import (
@@ -34,7 +34,8 @@ BODY_HEADING_PATTERN = re.compile(
 CN_DIGITS = {0: "零", 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九"}
 
 def get_text(node):
-    if node is None: return ""
+    if node is None:
+        return ""
     texts = node.findall('.//w:t', namespaces=NS)
     return "".join(t.text or "" for t in texts)
 
@@ -728,29 +729,38 @@ def generate_docx_v4(data: dict, template_path, output_path):
         fields_runs = []
         def commit(fr):
             nonlocal cur
-            if not fr: return
+            if not fr:
+                return
             txt = vals[cur] if cur < len(vals) else ""
             cur += 1
             f = fr[0]
             ts = f.findall('./w:t', namespaces=NS)
             if not ts:
                 ET.SubElement(f, f"{{{NS['w']}}}t")
-            for ex in ts[1:]: f.remove(ex)
+            for ex in ts[1:]:
+                f.remove(ex)
             _write_run_text_with_breaks(f, str(txt))
             pr = f.find('./w:rPr', namespaces=NS)
             if pr is not None:
                 h = pr.find('./w:highlight', namespaces=NS)
-                if h is not None: pr.remove(h)
+                if h is not None:
+                    pr.remove(h)
             for other in fr[1:]:
-                for ot in other.findall('./w:t', namespaces=NS): ot.text = ""
-                for br in other.findall('./w:br', namespaces=NS): other.remove(br)
+                for ot in other.findall('./w:t', namespaces=NS):
+                    ot.text = ""
+                for br in other.findall('./w:br', namespaces=NS):
+                    other.remove(br)
                 oPr = other.find('./w:rPr', namespaces=NS)
                 if oPr is not None:
                    ohl = oPr.find('./w:highlight', namespaces=NS)
-                   if ohl is not None: oPr.remove(ohl)
+                   if ohl is not None:
+                       oPr.remove(ohl)
         for r in runs:
-            if is_yellow_run(r): fields_runs.append(r)
-            else: commit(fields_runs); fields_runs = []
+            if is_yellow_run(r):
+                fields_runs.append(r)
+            else:
+                commit(fields_runs)
+                fields_runs = []
         commit(fields_runs)
 
     for pe in tree.iter():
@@ -781,7 +791,8 @@ def generate_docx_v4(data: dict, template_path, output_path):
         raise OtherProofError(str(exc)) from exc
     file_map["word/document.xml"] = ET.tostring(tree, encoding='utf-8', xml_declaration=True)
     with zipfile.ZipFile(output_path, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
-        for n, d in file_map.items(): zout.writestr(n, d)
+        for n, d in file_map.items():
+            zout.writestr(n, d)
 
 
 def _find_self_sales_table(body: ET.Element) -> Optional[ET.Element]:

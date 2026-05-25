@@ -5,13 +5,21 @@ import logging
 import os
 import random
 import time
-from email.utils import parsedate_to_datetime
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
+from .llm_response import (
+    _extract_json_payload,
+    _extract_text_from_response,
+    _normalize_optional_float,
+    _normalize_optional_int,
+    _normalize_text,
+    _normalize_text_list,
+)
 from .models import InferenceConfig, InferenceInput
 from .providers import ProviderHit
 
@@ -22,14 +30,6 @@ class _EmptyLLMContentError(RuntimeError):
     """Raised when LLM request succeeds but returns empty text content."""
 
 
-from .llm_response import (
-    _extract_json_payload,
-    _extract_text_from_response,
-    _normalize_optional_float,
-    _normalize_optional_int,
-    _normalize_text,
-    _normalize_text_list,
-)
 @dataclass(frozen=True)
 class LLMPlan:
     query: str

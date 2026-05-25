@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import uvicorn
 
-from report_automation.main import app
+from report_automation.main import create_app
+
+app = create_app()
 
 
 if __name__ == "__main__":

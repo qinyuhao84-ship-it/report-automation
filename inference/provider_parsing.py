@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
+
 def _compact_text(value: str, limit: int = 1200) -> str:
     text = " ".join((value or "").split())
     if len(text) <= limit:
@@ -83,7 +84,9 @@ def _pick_quote_sentence(text: str) -> Optional[str]:
         r"(亿美元|亿美金|亿元|万元|万亿元|million|billion|usd|美元|人民币|cny)",
     )
     for sentence in sentences:
-        if re.search(patterns[0], sentence, flags=re.IGNORECASE) and re.search(patterns[1], sentence, flags=re.IGNORECASE):
+        if re.search(patterns[0], sentence, flags=re.IGNORECASE) and re.search(
+            patterns[1], sentence, flags=re.IGNORECASE
+        ):
             return sentence
 
     for sentence in sentences:
@@ -215,7 +218,9 @@ def _extract_market_size_with_unit(text: str, usd_cny_rate: float) -> MarketSize
     return candidates[0][1]
 
 
-def _estimate_confidence(text: str, market_size: Optional[float], ratio: Optional[float], growth_rate: Optional[float]) -> float:
+def _estimate_confidence(
+    text: str, market_size: Optional[float], ratio: Optional[float], growth_rate: Optional[float]
+) -> float:
     confidence = 0.35
     if market_size is not None:
         confidence += 0.25

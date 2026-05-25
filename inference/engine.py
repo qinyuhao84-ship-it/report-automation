@@ -33,6 +33,7 @@ from .scoring import (
     score_evidence_chain,
 )
 
+
 class MarketInferenceEngine:
     """规则驱动引擎：边细分、边搜索、边回退。"""
 

@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+
 def _normalize_text(value: Any) -> str:
     if value is None:
         return ""

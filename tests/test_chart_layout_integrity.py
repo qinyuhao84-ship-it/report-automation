@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import io
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
-import xml.etree.ElementTree as ET
 
 import pytest
 
 import report_automation.docx.charts as chart_docx
 import report_automation.other_proof as other_proof
 from report_automation.docx.self_proof import generate_docx_v4
-
 
 NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",

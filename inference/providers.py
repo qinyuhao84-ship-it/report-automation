@@ -4,8 +4,19 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import urlparse
+
 from .models import ProviderConfig, ProviderMode, ProviderName
+from .provider_parsing import (
+    _build_relevance_keywords,
+    _compact_text,
+    _extract_metrics_from_text,
+    _is_doubao_login_redirect,
+    _is_relevant_to_market,
+    _looks_like_noise_link,
+    _pick_quote_sentence,
+)
 
 
 class ProviderError(RuntimeError):
@@ -47,15 +58,6 @@ class ProviderHit:
     usd_cny_rate_used: Optional[float] = None
     conversion_formula: Optional[str] = None
 
-
-from .provider_parsing import (
-    _build_relevance_keywords,
-    _compact_text,
-    _extract_metrics_from_text,
-    _is_doubao_login_redirect,
-    _is_relevant_to_market,
-    _looks_like_noise_link,
-)
 class BaseMarketProvider(ABC):
     def __init__(self, config: ProviderConfig) -> None:
         self.config = config

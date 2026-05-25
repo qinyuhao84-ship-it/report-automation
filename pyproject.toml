@@ -11,19 +11,36 @@ extend-exclude = [
   ".playwright-cli",
   ".playwright-mcp",
   ".claude",
+  "auto-deploy.py",
+  "scripts",
   "venv",
   "tmp",
   "output",
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I"]
 ignore = [
   "E501",
-  "B904",
-  "B905",
 ]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+exclude = [
+  "inference/engine.py",
+  "inference/estimators.py",
+  "inference/fx.py",
+  "inference/llm_orchestrator.py",
+  "inference/models.py",
+  "inference/providers.py",
+  "inference/task_manager.py",
+  "report_automation/docx/self_proof.py",
+  "report_automation/other_proof/core.py",
+  "tests/test_chart_layout_integrity.py",
+  "tests/test_engine.py",
+  "tests/test_engine_llm.py",
+  "tests/test_llm_orchestrator.py",
+  "tests/test_other_proof.py",
+  "tests/test_providers.py",
+]

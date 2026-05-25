@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import json
 import urllib.parse
-from pathlib import Path
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 import app as app_module
-import report_automation.other_proof as other_proof_module
 import report_automation.api.other_proof as other_proof_api
 import report_automation.docx.self_proof as self_proof
+import report_automation.other_proof as other_proof_module
 import report_automation.services.report_generation as report_generation
+from report_automation.main import create_app
 from report_automation.settings import SELF_TEMPLATE_PATH
 
 
@@ -112,6 +113,18 @@ def test_generate_requires_template_type():
     assert resp.status_code == 422
     detail = resp.json().get("detail", [])
     assert any(item.get("loc", [])[-1] == "template_type" for item in detail)
+
+
+def test_create_app_registers_public_routes():
+    route_paths = {route.path for route in create_app().routes}
+
+    assert "/generate" in route_paths
+    assert "/api/extract-final-docx" in route_paths
+    assert "/other-proof/chapter1" in route_paths
+    assert "/other-proof/chapter1-section" in route_paths
+    assert "/other-proof/company-lookup" in route_paths
+    assert "/" in route_paths
+    assert "/frontend/{file_path:path}" in route_paths
 
 
 def test_extract_self_docx_uses_confirmed_docx_layout():
@@ -421,7 +434,9 @@ def test_other_company_lookup_endpoint_returns_400_on_qcc_failure(monkeypatch):
     client = TestClient(app_module.app)
 
     def fake_lookup(_items):
-        raise other_proof_module.OtherProofError("企查查没有找到“浙江达航数据技术有限公司”的精确结果，请确认公司全称，并保持 Chrome 已登录企查查。")
+        raise other_proof_module.OtherProofError(
+            "企查查没有找到“浙江达航数据技术有限公司”的精确结果，请确认公司全称，并保持 Chrome 已登录企查查。"
+        )
 
     monkeypatch.setattr(other_proof_api, "lookup_other_companies", fake_lookup)
 
@@ -500,6 +515,7 @@ def test_generate_self_template_returns_docx(monkeypatch, tmp_path: Path):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
     assert "output.docx" in resp.headers.get("content-disposition", "")
+    assert not (tmp_path / "output.docx").exists()
 
 
 def test_generate_other_template_returns_docx(monkeypatch, tmp_path: Path):
@@ -520,6 +536,22 @@ def test_generate_other_template_returns_docx(monkeypatch, tmp_path: Path):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
     assert "output.docx" in resp.headers.get("content-disposition", "")
+    assert not (tmp_path / "output.docx").exists()
+
+
+def test_generate_self_returns_clear_error_when_template_missing(monkeypatch, tmp_path: Path):
+    client = TestClient(app_module.app)
+    payload = build_payload()
+    payload["template_type"] = "self"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(report_generation, "SELF_TEMPLATE_PATH", tmp_path / "missing-template.docx")
+
+    resp = client.post("/generate", json=payload)
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "模板文件不存在：missing-template.docx"
+    assert not list(tmp_path.glob("report-*.docx"))
 
 
 def test_generate_other_template_returns_warning_header(monkeypatch, tmp_path: Path):
