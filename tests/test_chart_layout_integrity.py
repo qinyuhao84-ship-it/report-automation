@@ -7,9 +7,9 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-import app as app_module
 import chart_docx
 import other_proof
+from report_automation.docx.self_proof import generate_docx_v4
 
 
 NS = {
@@ -249,7 +249,7 @@ def test_self_chart_layout_unchanged_when_source_count_matches_template(tmp_path
 
     output_path = tmp_path / "output.docx"
     payload = _build_self_payload(source_count=2)
-    app_module.generate_docx_v4(payload, template_path, output_path)
+    generate_docx_v4(payload, template_path, output_path)
 
     generated_slots = _extract_chart_slots(output_path)
     assert len(generated_slots) == 2
@@ -265,7 +265,7 @@ def test_self_chart_slots_expand_with_source_layers(tmp_path: Path):
     template_path = Path("0315-浙江达航数据技术有限公司-自证-初版.docx")
     output_path = tmp_path / "output-expanded.docx"
     payload = _build_self_payload(source_count=5)
-    app_module.generate_docx_v4(payload, template_path, output_path)
+    generate_docx_v4(payload, template_path, output_path)
 
     slots = _extract_chart_slots(output_path)
     assert len(slots) == 5
@@ -288,7 +288,7 @@ def test_self_chart_reference_numbering_and_sales_table_rows_follow_source_and_c
     payload["competitors"] = [
         {"name": "竞品A", "p23": "5%", "p24": "5.5%", "p25": "6%"},
     ]
-    app_module.generate_docx_v4(payload, template_path, output_path)
+    generate_docx_v4(payload, template_path, output_path)
 
     texts = _extract_paragraph_texts(output_path)
     joined = "\n".join(texts)
