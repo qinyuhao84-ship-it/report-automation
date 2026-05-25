@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from inference import InferenceConfig
-from other_proof import (
+from report_automation.other_proof import (
     OtherProofError,
     OtherProofTimeoutError,
     generate_other_chapter1,

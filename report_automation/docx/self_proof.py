@@ -11,7 +11,7 @@ from chart_docx import (
     build_chart_series_from_sources,
     inject_market_charts_into_docx,
 )
-from other_proof import OtherProofError
+from report_automation.other_proof import OtherProofError
 from report_automation.settings import SELF_TEMPLATE_PATH
 
 

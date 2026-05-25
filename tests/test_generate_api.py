@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from fastapi.testclient import TestClient
 
 import app as app_module
-import other_proof as other_proof_module
+import report_automation.other_proof as other_proof_module
 import report_automation.api.other_proof as other_proof_api
 import report_automation.docx.self_proof as self_proof
 import report_automation.services.report_generation as report_generation

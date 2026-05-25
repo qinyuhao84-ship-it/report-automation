@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import chart_docx
-import other_proof
+import report_automation.other_proof as other_proof
 from report_automation.docx.self_proof import generate_docx_v4
 
 

@@ -5,9 +5,15 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import httpx
-import other_proof
+import report_automation.other_proof.core as other_proof
 import pytest
-from other_proof import (
+from report_automation.other_proof import (
+    generate_other_chapter1,
+    generate_other_chapter1_section,
+    lookup_other_companies,
+    normalize_chapter1_sections,
+)
+from report_automation.other_proof.core import (
     _build_chart_number_plan,
     _build_chapter1_prompt,
     _build_chapter1_section_prompt,
@@ -21,10 +27,6 @@ from other_proof import (
     _set_paragraph_text,
     _validate_manual_company_profiles,
     _ensure_supply_chain_subsections,
-    generate_other_chapter1,
-    generate_other_chapter1_section,
-    lookup_other_companies,
-    normalize_chapter1_sections,
 )
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
-from other_proof import OtherProofError, generate_other_docx
+from report_automation.other_proof import OtherProofError, generate_other_docx
 from report_automation.docx.self_proof import generate_docx_v4
 from report_automation.schemas import DataModel
 from report_automation.services.errors import other_proof_error_detail

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from other_proof import OtherProofError
+from report_automation.other_proof import OtherProofError
 
 
 def other_proof_error_detail(exc: OtherProofError):
