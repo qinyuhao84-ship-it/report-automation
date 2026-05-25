@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, List, Optional, Sequence, Tuple
 
+from .engine_types import BestSnapshot, CandidatePath
 from .estimators import EstimateResult, MarketEstimator
 from .fx import FxRateResult, get_usd_cny_rate
 from .llm_orchestrator import (
@@ -32,27 +32,6 @@ from .scoring import (
     score_evidence,
     score_evidence_chain,
 )
-
-
-@dataclass
-class CandidatePath:
-    path: List[str]
-    parent_market_size: Optional[float]
-    depth: int
-
-
-@dataclass
-class BestSnapshot:
-    path: List[str]
-    market_size: float
-    market_share: float
-    evidence_score: float
-    verified_sources: int
-    total_sources: int
-    fit_passed: bool
-    fit_reason: str
-    fit_confidence: float
-
 
 class MarketInferenceEngine:
     """规则驱动引擎：边细分、边搜索、边回退。"""
