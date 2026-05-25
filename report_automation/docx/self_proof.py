@@ -6,7 +6,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from typing import List, Optional
 
-from chart_docx import (
+from report_automation.docx.charts import (
     ChartDataError,
     build_chart_series_from_sources,
     inject_market_charts_into_docx,
