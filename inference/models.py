@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, root_validator, validator
 
 
 class TaskStatus(str, Enum):
@@ -130,20 +130,17 @@ class InferenceInput(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, use_enum_values=False)
 
-    @field_validator("company_name", "product_name", "product_code", "product_intro", "product_category", "company_intro", mode="before")
-    @classmethod
+    @validator("company_name", "product_name", "product_code", "product_intro", "product_category", "company_intro", pre=True)
     def _strip_text(cls, value):
         if value is None:
             return ""
         return _normalize_text(str(value))
 
-    @field_validator("sales_2023", "sales_2024", "sales_2025", mode="before")
-    @classmethod
+    @validator("sales_2023", "sales_2024", "sales_2025", pre=True)
     def _coerce_sales(cls, value):
         return _coerce_float(value)
 
-    @field_validator("competitors", mode="before")
-    @classmethod
+    @validator("competitors", pre=True)
     def _normalize_competitors(cls, value):
         if value is None:
             return []
@@ -157,17 +154,16 @@ class InferenceInput(BaseModel):
                 items.append(text)
         return items
 
-    @field_validator("market_scope", mode="before")
-    @classmethod
+    @validator("market_scope", pre=True)
     def _coerce_market_scope(cls, value):
         return _normalize_market_scope(value)
 
-    @model_validator(mode="after")
-    def _validate_sales_presence(self):
-        sales = [self.sales_2023, self.sales_2024, self.sales_2025]
+    @root_validator(skip_on_failure=True)
+    def _validate_sales_presence(cls, values):
+        sales = [values.get("sales_2023"), values.get("sales_2024"), values.get("sales_2025")]
         if all(item is None for item in sales):
             raise ValueError("至少需要提供 2023/2024/2025 中的一项销售额")
-        return self
+        return values
 
     @property
     def latest_sales_year(self) -> int:
@@ -202,8 +198,7 @@ class ProviderConfig(BaseModel):
 
     model_config = ConfigDict(use_enum_values=False)
 
-    @field_validator("name", mode="before")
-    @classmethod
+    @validator("name", pre=True)
     def _normalize_name(cls, value):
         if isinstance(value, ProviderName):
             return value
@@ -216,8 +211,7 @@ class ProviderConfig(BaseModel):
             return ProviderName.YUANBAO
         raise ValueError("provider name 必须是 mitata / doubao / yuanbao")
 
-    @field_validator("mode", mode="before")
-    @classmethod
+    @validator("mode", pre=True)
     def _normalize_mode(cls, value):
         if isinstance(value, ProviderMode):
             return value
@@ -281,26 +275,23 @@ class InferenceConfig(BaseModel):
 
     model_config = ConfigDict(use_enum_values=False)
 
-    @field_validator("market_scope_default", mode="before")
-    @classmethod
+    @validator("market_scope_default", pre=True)
     def _normalize_default_scope(cls, value):
         return _normalize_market_scope(value)
 
-    @field_validator(
+    @validator(
         "llm_api_base",
         "llm_api_key_env",
         "llm_model",
         "llm_planning_model",
         "llm_extraction_model",
         "llm_user_agent",
-        mode="before",
+        pre=True,
     )
-    @classmethod
     def _strip_llm_text(cls, value):
         return _normalize_optional_text(value)
 
-    @field_validator("estimation_priority", mode="before")
-    @classmethod
+    @validator("estimation_priority", pre=True)
     def _normalize_estimation_priority(cls, value):
         if value is None:
             return []
@@ -319,8 +310,7 @@ class InferenceConfig(BaseModel):
             EstimationMethod.ANALOGOUS_BENCHMARK,
         ]
 
-    @field_validator("provider_priority", mode="before")
-    @classmethod
+    @validator("provider_priority", pre=True)
     def _normalize_provider_priority(cls, value):
         if value is None:
             return []

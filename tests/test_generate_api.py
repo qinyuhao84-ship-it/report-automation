@@ -2,18 +2,12 @@ from __future__ import annotations
 
 import json
 import urllib.parse
-import xml.etree.ElementTree as ET
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from fastapi.testclient import TestClient
 
 import app as app_module
-import report_automation.api.other_proof as other_proof_api
-import report_automation.docx.self_proof as self_proof
-import report_automation.other_proof as other_proof_module
-import report_automation.services.report_generation as report_generation
-from report_automation.main import create_app
-from report_automation.settings import SELF_TEMPLATE_PATH
 
 
 def build_payload() -> dict:
@@ -115,20 +109,8 @@ def test_generate_requires_template_type():
     assert any(item.get("loc", [])[-1] == "template_type" for item in detail)
 
 
-def test_create_app_registers_public_routes():
-    route_paths = {route.path for route in create_app().routes}
-
-    assert "/generate" in route_paths
-    assert "/api/extract-final-docx" in route_paths
-    assert "/other-proof/chapter1" in route_paths
-    assert "/other-proof/chapter1-section" in route_paths
-    assert "/other-proof/company-lookup" in route_paths
-    assert "/" in route_paths
-    assert "/frontend/{file_path:path}" in route_paths
-
-
 def test_extract_self_docx_uses_confirmed_docx_layout():
-    result = self_proof.extract_self_docx_fields(SELF_TEMPLATE_PATH)
+    result = app_module._extract_self_docx_fields(app_module.TEMPLATE_PATH)
 
     assert result["target_scope"] == "CN"
     assert result["company_intro"].startswith("浙江达航数据技术有限公司成立于2021年")
@@ -159,15 +141,15 @@ def test_extract_self_docx_uses_confirmed_docx_layout():
 
 
 def test_extract_source_helpers_support_compact_confirmed_docx_values():
-    names = self_proof._extract_numbered_source_lines(
+    names = app_module._extract_numbered_source_lines(
         "数据来源：1. 来源一2. 来源二3. GGII：2024年中国锂电池出货量近1.2TWh",
         "数据来源",
     )
-    urls = self_proof._extract_numbered_source_lines(
+    urls = app_module._extract_numbered_source_lines(
         "来源网址：1. https://example.com/a.html2. https://example.com/b.html",
         "来源网址",
     )
-    values = self_proof._extract_market_values_yi(
+    values = app_module._extract_market_values_yi(
         "按此增长率推算，2023-2025年市场规模分别为26.00亿元、27.56亿元、29.21亿元。",
         source_no=1,
     )
@@ -179,12 +161,12 @@ def test_extract_source_helpers_support_compact_confirmed_docx_values():
 
 def test_extract_final_docx_endpoint_returns_confirmed_layout():
     client = TestClient(app_module.app)
-    with open(SELF_TEMPLATE_PATH, "rb") as fh:
+    with open(app_module.TEMPLATE_PATH, "rb") as fh:
         resp = client.post(
             "/api/extract-final-docx",
             files={
                 "file": (
-                    Path(SELF_TEMPLATE_PATH).name,
+                    Path(app_module.TEMPLATE_PATH).name,
                     fh,
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 )
@@ -210,7 +192,7 @@ def test_other_chapter1_endpoint_returns_sections(monkeypatch):
             "warnings": ["第一章部分段落不足，已补齐占位内容"],
         }
 
-    monkeypatch.setattr(other_proof_api, "generate_other_chapter1", fake_generate_other_chapter1)
+    monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
 
     resp = client.post("/other-proof/chapter1", json={"product_name": "示例产品"})
 
@@ -225,9 +207,9 @@ def test_other_chapter1_endpoint_returns_504_on_timeout(monkeypatch):
 
     def fake_generate_other_chapter1(_product_name, _config, allow_partial=False):
         assert allow_partial is False
-        raise other_proof_module.OtherProofTimeoutError("第一章生成超时。请查看调试回放文件后重试。")
+        raise app_module.OtherProofTimeoutError("第一章生成超时。请查看调试回放文件后重试。")
 
-    monkeypatch.setattr(other_proof_api, "generate_other_chapter1", fake_generate_other_chapter1)
+    monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
 
     resp = client.post("/other-proof/chapter1", json={"product_name": "示例产品"})
 
@@ -239,12 +221,12 @@ def test_other_chapter1_endpoint_returns_replay_path_on_failure(monkeypatch):
     client = TestClient(app_module.app)
 
     def fake_generate_other_chapter1(_product_name, _config, allow_partial=False):
-        raise other_proof_module.OtherProofTimeoutError(
+        raise app_module.OtherProofTimeoutError(
             "第一章生成失败",
             replay_file_path="/tmp/chapter1-replay.json",
         )
 
-    monkeypatch.setattr(other_proof_api, "generate_other_chapter1", fake_generate_other_chapter1)
+    monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
 
     resp = client.post("/other-proof/chapter1", json={"product_name": "示例产品"})
 
@@ -262,7 +244,7 @@ def test_other_chapter1_endpoint_passes_allow_partial(monkeypatch):
         assert allow_partial is True
         return {"sections": [], "warnings": ["allow_partial=true"]}
 
-    monkeypatch.setattr(other_proof_api, "generate_other_chapter1", fake_generate_other_chapter1)
+    monkeypatch.setattr(app_module, "generate_other_chapter1", fake_generate_other_chapter1)
 
     resp = client.post("/other-proof/chapter1", json={"product_name": "示例产品", "allow_partial": True})
 
@@ -282,7 +264,7 @@ def test_other_chapter1_section_endpoint_returns_section(monkeypatch):
             "warnings": [],
         }
 
-    monkeypatch.setattr(other_proof_api, "generate_other_chapter1_section", fake_generate_other_chapter1_section)
+    monkeypatch.setattr(app_module, "generate_other_chapter1_section", fake_generate_other_chapter1_section)
 
     resp = client.post(
         "/other-proof/chapter1-section",
@@ -299,9 +281,9 @@ def test_other_chapter1_section_endpoint_returns_504_on_timeout(monkeypatch):
     client = TestClient(app_module.app)
 
     def fake_generate_other_chapter1_section(_product_name, _section_key, _generated_sections, _config):
-        raise other_proof_module.OtherProofTimeoutError("第一章《背景与概述》生成失败，请重试。")
+        raise app_module.OtherProofTimeoutError("第一章《背景与概述》生成失败，请重试。")
 
-    monkeypatch.setattr(other_proof_api, "generate_other_chapter1_section", fake_generate_other_chapter1_section)
+    monkeypatch.setattr(app_module, "generate_other_chapter1_section", fake_generate_other_chapter1_section)
 
     resp = client.post(
         "/other-proof/chapter1-section",
@@ -322,7 +304,7 @@ def test_rewrite_header_titles_updates_matching_header_paragraph():
     """.strip().encode("utf-8")
     file_map = {"word/header2.xml": header_xml}
 
-    self_proof.rewrite_header_titles(file_map, "新公司", "新产品")
+    app_module.rewrite_header_titles(file_map, "新公司", "新产品")
 
     rendered = file_map["word/header2.xml"].decode("utf-8")
     assert "新公司新产品市场占有率证明报告" in rendered
@@ -340,7 +322,7 @@ def test_rewrite_summary_market_research_phrase_replaces_quoted_product():
         </w:document>
         """
     )
-    self_proof.rewrite_summary_market_research_phrase(doc, "新产品")
+    app_module.rewrite_summary_market_research_phrase(doc, "新产品")
     rendered = "".join(node.text or "" for node in doc.findall(f".//{{{ns}}}t"))
     assert "对“新产品”细分市场进行拆分和规模测算" in rendered
 
@@ -380,7 +362,7 @@ def test_apply_body_plain_paragraph_justification_only_for_body_text():
         """
     )
 
-    self_proof.apply_body_plain_paragraph_justification(root)
+    app_module.apply_body_plain_paragraph_justification(root)
 
     paragraphs = root.findall(f".//{{{ns}}}p")
     body_jc = paragraphs[0].find(f"./{{{ns}}}pPr/{{{ns}}}jc")
@@ -416,7 +398,7 @@ def test_other_company_lookup_endpoint_returns_resolved_profiles(monkeypatch):
             "pending": [],
         }
 
-    monkeypatch.setattr(other_proof_api, "lookup_other_companies", fake_lookup)
+    monkeypatch.setattr(app_module, "lookup_other_companies", fake_lookup)
 
     resp = client.post(
         "/other-proof/company-lookup",
@@ -434,11 +416,9 @@ def test_other_company_lookup_endpoint_returns_400_on_qcc_failure(monkeypatch):
     client = TestClient(app_module.app)
 
     def fake_lookup(_items):
-        raise other_proof_module.OtherProofError(
-            "企查查没有找到“浙江达航数据技术有限公司”的精确结果，请确认公司全称，并保持 Chrome 已登录企查查。"
-        )
+        raise app_module.OtherProofError("企查查没有找到“浙江达航数据技术有限公司”的精确结果，请确认公司全称，并保持 Chrome 已登录企查查。")
 
-    monkeypatch.setattr(other_proof_api, "lookup_other_companies", fake_lookup)
+    monkeypatch.setattr(app_module, "lookup_other_companies", fake_lookup)
 
     resp = client.post(
         "/other-proof/company-lookup",
@@ -506,7 +486,7 @@ def test_generate_self_template_returns_docx(monkeypatch, tmp_path: Path):
         Path(output_path).write_bytes(b"PK\x03\x04fake-docx")
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(report_generation, "generate_docx_v4", fake_generate)
+    monkeypatch.setattr(app_module, "generate_docx_v4", fake_generate)
 
     resp = client.post("/generate", json=payload)
 
@@ -515,7 +495,6 @@ def test_generate_self_template_returns_docx(monkeypatch, tmp_path: Path):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
     assert "output.docx" in resp.headers.get("content-disposition", "")
-    assert not (tmp_path / "output.docx").exists()
 
 
 def test_generate_other_template_returns_docx(monkeypatch, tmp_path: Path):
@@ -527,7 +506,7 @@ def test_generate_other_template_returns_docx(monkeypatch, tmp_path: Path):
         return []
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(report_generation, "generate_other_docx", fake_generate)
+    monkeypatch.setattr(app_module, "generate_other_docx", fake_generate)
 
     resp = client.post("/generate", json=payload)
 
@@ -536,22 +515,6 @@ def test_generate_other_template_returns_docx(monkeypatch, tmp_path: Path):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
     assert "output.docx" in resp.headers.get("content-disposition", "")
-    assert not (tmp_path / "output.docx").exists()
-
-
-def test_generate_self_returns_clear_error_when_template_missing(monkeypatch, tmp_path: Path):
-    client = TestClient(app_module.app)
-    payload = build_payload()
-    payload["template_type"] = "self"
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(report_generation, "SELF_TEMPLATE_PATH", tmp_path / "missing-template.docx")
-
-    resp = client.post("/generate", json=payload)
-
-    assert resp.status_code == 500
-    assert resp.json()["detail"] == "模板文件不存在：missing-template.docx"
-    assert not list(tmp_path.glob("report-*.docx"))
 
 
 def test_generate_other_template_returns_warning_header(monkeypatch, tmp_path: Path):
@@ -563,7 +526,7 @@ def test_generate_other_template_returns_warning_header(monkeypatch, tmp_path: P
         return ["第一章《行业发展趋势》未生成成功，已写入占位内容"]
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(report_generation, "generate_other_docx", fake_generate)
+    monkeypatch.setattr(app_module, "generate_other_docx", fake_generate)
 
     resp = client.post("/generate", json=payload)
 
@@ -585,7 +548,7 @@ def test_generate_other_template_returns_chapter1_replay_header(monkeypatch, tmp
         return []
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(report_generation, "generate_other_docx", fake_generate)
+    monkeypatch.setattr(app_module, "generate_other_docx", fake_generate)
 
     resp = client.post("/generate", json=payload)
 

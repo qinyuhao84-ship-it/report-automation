@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Sequence
 
+
 DRAWING_NS = {
     "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
