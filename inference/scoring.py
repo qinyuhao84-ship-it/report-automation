@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence
 
-from .models import AttemptRecord, EvidenceRecord, InferenceInput
+from .models import EvidenceRecord, InferenceInput
 
 
 @dataclass(frozen=True)

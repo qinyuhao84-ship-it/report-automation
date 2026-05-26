@@ -5,26 +5,29 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import httpx
-import other_proof
 import pytest
-from other_proof import (
-    _build_chart_number_plan,
-    _build_chapter1_prompt,
-    _build_chapter1_section_prompt,
-    _build_company_rows,
-    _highlight_self_row_in_comparison_table,
-    _rewrite_summary_market_research_phrase,
-    _rewrite_dynamic_chart_references,
-    _rewrite_other_header_titles,
-    _extract_json_payload,
-    _resolve_chapter1_model_name,
-    _set_paragraph_text,
-    _validate_manual_company_profiles,
-    _ensure_supply_chain_subsections,
+
+import report_automation.other_proof.core as other_proof
+from report_automation.other_proof import (
     generate_other_chapter1,
     generate_other_chapter1_section,
     lookup_other_companies,
     normalize_chapter1_sections,
+)
+from report_automation.other_proof.core import (
+    _build_chapter1_prompt,
+    _build_chapter1_section_prompt,
+    _build_chart_number_plan,
+    _build_company_rows,
+    _ensure_supply_chain_subsections,
+    _extract_json_payload,
+    _highlight_self_row_in_comparison_table,
+    _resolve_chapter1_model_name,
+    _rewrite_dynamic_chart_references,
+    _rewrite_other_header_titles,
+    _rewrite_summary_market_research_phrase,
+    _set_paragraph_text,
+    _validate_manual_company_profiles,
 )
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional, Sequence, Tuple
 
-from .models import EvidenceRecord, EstimationMethod, InferenceConfig, InferenceInput
+from .models import EstimationMethod, EvidenceRecord, InferenceConfig, InferenceInput
 from .scoring import clamp
 
 

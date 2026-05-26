@@ -4,10 +4,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import List
 
-import pytest
-
 from inference.engine import MarketInferenceEngine
-from inference.models import InferenceConfig, InferenceInput, TaskStatus, SearchAction
+from inference.models import InferenceConfig, InferenceInput, SearchAction, TaskStatus
 from inference.providers import ProviderHit
 
 

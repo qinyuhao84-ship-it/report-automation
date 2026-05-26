@@ -1,0 +1,2170 @@
+    let sourceCount = 0;
+    let autoSaveTimer = null;
+    let lastSavedSnapshotText = "";
+    let draftLibrary = null;
+    let selectedFinalDocxFile = null;
+    let otherProofChapter1Sections = [];
+    let otherProofChapter1ReplayFilePath = "";
+    const OTHER_CHAPTER1_CACHE_KEY = ReportAutomationChapter1Config.cacheKey;
+    let otherProofChapter1CacheByCompany = {};
+    let otherProofResolvedProfiles = [];
+    let otherProofPendingCompanies = [];
+    let otherChapter1AbortController = null;
+    let chapter1AbortHappened = false;
+    const CHAPTER1_SECTION_SPECS = ReportAutomationChapter1Config.sectionSpecs;
+    const CHAPTER1_PLACEHOLDER_TEXT = ReportAutomationChapter1Config.placeholderText;
+
+    function setStatus(text, mode) {
+      const el = document.getElementById("status");
+      el.className = "dock-status";
+      if (mode === "error") el.classList.add("error");
+      el.innerHTML = "状态：<strong>" + text + "</strong>";
+    }
+
+    function normalizeCompanyCacheKey(rawCompanyName) {
+      return String(rawCompanyName || "").trim();
+    }
+
+    function loadOtherChapter1CacheFromStorage() {
+      try {
+        const raw = localStorage.getItem(OTHER_CHAPTER1_CACHE_KEY);
+        if (!raw) {
+          otherProofChapter1CacheByCompany = {};
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        otherProofChapter1CacheByCompany = parsed && typeof parsed === "object" ? parsed : {};
+      } catch (_e) {
+        otherProofChapter1CacheByCompany = {};
+      }
+    }
+
+    function persistOtherChapter1CacheToStorage() {
+      try {
+        localStorage.setItem(OTHER_CHAPTER1_CACHE_KEY, JSON.stringify(otherProofChapter1CacheByCompany));
+      } catch (_e) {
+        // 存储失败时保持内存态，不阻断业务流程
+      }
+    }
+
+    function chapter1SectionsContainPlaceholder(sections) {
+      if (!Array.isArray(sections) || sections.length !== CHAPTER1_SECTION_SPECS.length) return true;
+      const seenKeys = new Set();
+      for (const section of sections) {
+        if (!section || typeof section !== "object") return true;
+        const key = String(section.key || "").trim();
+        const spec = CHAPTER1_SECTION_SPECS.find((item) => item.key === key);
+        if (!spec || seenKeys.has(key)) return true;
+        seenKeys.add(key);
+        const paragraphs = Array.isArray(section.paragraphs) ? section.paragraphs : [];
+        if (paragraphs.length < spec.slot_count) return true;
+        for (const item of paragraphs) {
+          const text = String(item || "").trim();
+          if (!text || text === CHAPTER1_PLACEHOLDER_TEXT || text.startsWith("该部分生成失败")) return true;
+          if (text.includes("待补充") || text.includes("请结合公开行业资料补充")) return true;
+        }
+      }
+      return false;
+    }
+
+    function isReusableOtherChapter1CacheEntry(entry, productName = "") {
+      if (!entry || typeof entry !== "object") return false;
+      if (chapter1SectionsContainPlaceholder(entry.sections)) return false;
+      const expectedProduct = String(productName || "").trim();
+      if (!expectedProduct) return true;
+      const cachedProduct = String(entry.product_name || "").trim();
+      return cachedProduct === expectedProduct;
+    }
+
+    function getOtherChapter1Cache(companyName, productName = "") {
+      const key = normalizeCompanyCacheKey(companyName);
+      if (!key) return null;
+      const entry = otherProofChapter1CacheByCompany[key];
+      if (!entry) return null;
+      if (!isReusableOtherChapter1CacheEntry(entry, productName)) {
+        delete otherProofChapter1CacheByCompany[key];
+        persistOtherChapter1CacheToStorage();
+        return null;
+      }
+      return entry;
+    }
+
+    function setOtherChapter1Cache(companyName, sections, productName = "") {
+      const key = normalizeCompanyCacheKey(companyName);
+      if (!key) return;
+      otherProofChapter1CacheByCompany[key] = {
+        company_name: key,
+        product_name: String(productName || "").trim(),
+        sections: Array.isArray(sections) ? sections : [],
+        updated_ts: Date.now(),
+      };
+      persistOtherChapter1CacheToStorage();
+    }
+
+    function clearOtherChapter1Cache(companyName) {
+      const key = normalizeCompanyCacheKey(companyName);
+      if (!key) return;
+      if (!otherProofChapter1CacheByCompany[key]) return;
+      delete otherProofChapter1CacheByCompany[key];
+      persistOtherChapter1CacheToStorage();
+    }
+
+    function applyCompanyChapter1Cache(companyName) {
+      const product = document.getElementById("product_name")?.value || "";
+      const entry = getOtherChapter1Cache(companyName, product);
+      otherProofChapter1Sections = entry ? entry.sections : [];
+      otherProofChapter1ReplayFilePath = "";
+      if (isOtherTemplate()) {
+        updateChapter1State(
+          otherProofChapter1Sections.length
+            ? `第一章：已缓存 ${otherProofChapter1Sections.length} 个小节`
+            : "第一章：尚未生成"
+        );
+      }
+    }
+
+    function updateDraftMeta(message) {
+      const el = document.getElementById("draftMeta");
+      if (!el) return;
+      el.textContent = message || "草稿未保存";
+    }
+
+    function getTopActionButtons() {
+      return {
+        createCompany: document.getElementById("createCompanyBtnTop"),
+        createVersion: document.getElementById("createVersionBtnTop"),
+        createFinalVersion: document.getElementById("createFinalVersionBtnTop"),
+        saveVersion: document.getElementById("saveDraftBtnTop"),
+        deleteVersion: document.getElementById("deleteVersionBtnTop"),
+        deleteCompany: document.getElementById("deleteCompanyBtnTop"),
+      };
+    }
+
+    function updateTopActionState() {
+      const companySelect = document.getElementById("draftCompanySelect");
+      const versionSelect = document.getElementById("draftVersionSelect");
+      const hasCompany = !!String(companySelect?.value || "").trim();
+      const hasVersion = !!parseDraftEntryValue(versionSelect?.value || "");
+      const busyKeys = new Set();
+      const buttons = getTopActionButtons();
+      Object.entries(buttons).forEach(([key, button]) => {
+        if (button && button.dataset.busy === "1") busyKeys.add(key);
+      });
+
+      if (buttons.createVersion) {
+        buttons.createVersion.disabled = !hasCompany || !hasVersion || busyKeys.has("createVersion");
+        buttons.createVersion.title = hasVersion ? "基于当前版本创建下一版" : "请先选择企业和版本";
+      }
+      if (buttons.createFinalVersion) {
+        buttons.createFinalVersion.disabled = !hasCompany || busyKeys.has("createFinalVersion");
+        buttons.createFinalVersion.title = hasCompany ? "上传最终确认的自证 .docx 并自动填充表单" : "请先选择企业";
+      }
+      if (buttons.saveVersion) {
+        buttons.saveVersion.disabled = !hasCompany || !hasVersion || busyKeys.has("saveVersion");
+        buttons.saveVersion.title = hasVersion ? "保存当前版本（Ctrl/Cmd+S）" : "请先选择企业和版本";
+      }
+      if (buttons.deleteVersion) {
+        buttons.deleteVersion.disabled = !hasCompany || !hasVersion || busyKeys.has("deleteVersion");
+        buttons.deleteVersion.title = hasVersion ? "删除当前选中的版本" : "请先选择企业和版本";
+      }
+      if (buttons.deleteCompany) {
+        buttons.deleteCompany.disabled = !hasCompany || busyKeys.has("deleteCompany");
+        buttons.deleteCompany.title = hasCompany ? "删除该企业全部版本" : "请先选择企业";
+      }
+      if (buttons.createCompany) {
+        buttons.createCompany.disabled = busyKeys.has("createCompany");
+      }
+    }
+
+    async function runTopAction(buttonId, busyText, action) {
+      const button = document.getElementById(buttonId);
+      if (!button) return action();
+      if (button.dataset.busy === "1") return;
+      const originalText = button.textContent;
+      button.dataset.busy = "1";
+      button.disabled = true;
+      button.textContent = busyText;
+      updateTopActionState();
+      try {
+        return await action();
+      } finally {
+        button.dataset.busy = "0";
+        button.textContent = originalText;
+        updateTopActionState();
+      }
+    }
+
+    function formatTimeStamp(ts) {
+      const value = Number(ts);
+      if (!value) return "--";
+      const dt = new Date(value);
+      if (Number.isNaN(dt.getTime())) return "--";
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} ${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}:${String(dt.getSeconds()).padStart(2, "0")}`;
+    }
+
+    function parseDraftEntryValue(raw) {
+      const parts = String(raw || "").split(":");
+      if (parts.length !== 2) return null;
+      if (parts[0] !== "version") return null;
+      const versionNo = Number(parts[1] || "");
+      if (!Number.isInteger(versionNo) || versionNo < 1) return null;
+      const kind = "version";
+      return { kind, versionNo };
+    }
+
+    function formatDraftEntryLabel(item) {
+      const base = `第${item.versionNo}版`;
+      const finalMark = item.snapshot && item.snapshot.is_final ? " 【最终】" : "";
+      return `${base}${finalMark}（${formatTimeStamp(item.savedTs)}）`;
+    }
+
+    // ── Final-version modal ────────────────────────────────────────────
+
+    function onCreateFinalVersionClick() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，请刷新页面", "error");
+        return;
+      }
+      const companyName = document.getElementById("draftCompanySelect")?.value || "";
+      if (!companyName) {
+        setStatus("请先选择企业，再新建最终版本", "error");
+        return;
+      }
+      selectedFinalDocxFile = null;
+      document.getElementById("uploadFileName").textContent = "";
+      document.getElementById("uploadError").className = "upload-error";
+      document.getElementById("uploadProgress").className = "upload-progress";
+      document.getElementById("modalImportBtn").disabled = true;
+      document.getElementById("fileInput").value = "";
+      document.getElementById("uploadZone").classList.remove("drag-over");
+      document.getElementById("finalVersionModal").classList.add("open");
+    }
+
+    function closeFinalVersionModal() {
+      document.getElementById("finalVersionModal").classList.remove("open");
+      selectedFinalDocxFile = null;
+    }
+
+    function onFileSelected(files) {
+      const file = files && files[0];
+      const errEl = document.getElementById("uploadError");
+      errEl.className = "upload-error";
+      const importBtn = document.getElementById("modalImportBtn");
+
+      if (!file) {
+        selectedFinalDocxFile = null;
+        document.getElementById("uploadFileName").textContent = "";
+        importBtn.disabled = true;
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith(".docx")) {
+        errEl.textContent = "仅支持 .docx 文件，请重新选择";
+        errEl.className = "upload-error active";
+        importBtn.disabled = true;
+        return;
+      }
+      selectedFinalDocxFile = file;
+      document.getElementById("uploadFileName").textContent = file.name;
+      importBtn.disabled = false;
+    }
+
+    async function onImportFinalDocx() {
+      if (!selectedFinalDocxFile) return;
+      const importBtn = document.getElementById("modalImportBtn");
+      const cancelBtn = document.getElementById("modalCancelBtn");
+      const progressEl = document.getElementById("uploadProgress");
+      const errEl = document.getElementById("uploadError");
+
+      importBtn.disabled = true;
+      cancelBtn.disabled = true;
+      progressEl.className = "upload-progress active";
+      errEl.className = "upload-error";
+
+      try {
+        const formData = new FormData();
+        formData.append("file", selectedFinalDocxFile);
+
+        const resp = await fetch("/api/extract-final-docx", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!resp.ok) {
+          const detail = await resp.json().catch(() => ({}));
+          throw new Error(detail.detail || `服务器返回 ${resp.status}`);
+        }
+
+        const extracted = await resp.json();
+
+        closeFinalVersionModal();
+
+        // Fill form fields
+        fillFormFromExtractedData(extracted);
+
+        // Save as a new version marked as final
+        await saveAsFinalVersion(extracted);
+
+        setStatus("最终版本已导入并保存，请核对各字段内容");
+      } catch (err) {
+        errEl.textContent = err.message || "导入失败";
+        errEl.className = "upload-error active";
+      } finally {
+        progressEl.className = "upload-progress";
+        importBtn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    }
+
+    function fillFormFromExtractedData(data) {
+      // Direct field mappings
+      const directFields = [
+        "province", "company_name", "product_name", "product_code",
+        "sale_23", "total_mkt_23", "pct_23", "rank_23",
+        "sale_24", "total_mkt_24", "pct_24", "rank_24",
+        "sale_25", "total_mkt_25", "pct_25", "rank_25",
+        "company_intro", "product_intro", "target_scope", "proof_scope", "market_name",
+      ];
+      directFields.forEach((key) => {
+        const el = document.getElementById(key);
+        if (el && data[key] != null) el.value = data[key];
+      });
+
+      // Date fields
+      if (data.year) document.getElementById("year").value = String(data.year);
+      if (data.month) document.getElementById("month").value = String(data.month);
+      if (data.day) document.getElementById("day").value = String(data.day);
+
+      // Sources
+      const sourceHolder = document.getElementById("sources_list");
+      sourceHolder.innerHTML = "";
+      sourceCount = 0;
+      if (Array.isArray(data.sources) && data.sources.length) {
+        data.sources.forEach((s) => addSource(s));
+      } else {
+        addSource();
+      }
+      syncBusinessMarketScaleFromSources();
+
+      // Competitors
+      const compBody = document.getElementById("competitorBody");
+      compBody.innerHTML = "";
+      if (Array.isArray(data.competitors) && data.competitors.length) {
+        data.competitors.forEach((c) => {
+          if (c.name) addCompetitorRow(c, { syncRows: false });
+        });
+      } else {
+        addCompetitorRow();
+      }
+      refreshCompetitorBoard({ syncRows: false });
+
+      // Template type
+      document.getElementById("template_type").value = data.template_type || "self";
+      toggleTemplateMode();
+
+      updateProgress();
+    }
+
+    async function saveAsFinalVersion(extractedData) {
+      if (!draftLibrary) return;
+
+      const companyName = document.getElementById("draftCompanySelect")?.value || "";
+      if (!companyName) {
+        setStatus("最终版本数据已填入表单，但未能自动保存（未选择企业）", "error");
+        return;
+      }
+
+      // Build snapshot from current form state (already filled)
+      const snapshot = buildDraftSnapshot(false);
+      snapshot.is_final = true;
+
+      const nextVersionNo = await draftLibrary.getNextVersionNo(companyName);
+      snapshot.saved_mode = "version";
+      snapshot.saved_version_no = nextVersionNo;
+
+      try {
+        await draftLibrary.saveVersionDraft(companyName, nextVersionNo, snapshot, Number(snapshot.saved_ts) || Date.now());
+      } catch (err) {
+        setStatus(`最终版本保存失败：${err.message || "IndexedDB 写入失败"}`, "error");
+        return;
+      }
+
+      try {
+        lastSavedSnapshotText = JSON.stringify(snapshot);
+      } catch (_e) {
+        lastSavedSnapshotText = "";
+      }
+
+      await refreshDraftPickers(companyName, `version:${nextVersionNo}`);
+      await loadDraft(true);
+      updateDraftMeta(`${companyName} 第${nextVersionNo}版【最终】已创建`);
+    }
+
+    // ── Drag-and-drop support ─────────────────────────────────────────
+
+    function setupUploadDragDrop() {
+      const zone = document.getElementById("uploadZone");
+      if (!zone) return;
+
+      zone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        zone.classList.add("drag-over");
+      });
+      zone.addEventListener("dragleave", () => {
+        zone.classList.remove("drag-over");
+      });
+      zone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        zone.classList.remove("drag-over");
+        const files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files.length) {
+          document.getElementById("fileInput").files = files;
+          onFileSelected(files);
+        }
+      });
+      // Close modal on overlay click
+      document.getElementById("finalVersionModal").addEventListener("click", (e) => {
+        if (e.target === document.getElementById("finalVersionModal")) {
+          closeFinalVersionModal();
+        }
+      });
+      // Close modal on Escape
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && document.getElementById("finalVersionModal").classList.contains("open")) {
+          closeFinalVersionModal();
+        }
+      });
+    }
+
+    function getSelectedVersionTarget() {
+      const companyName = document.getElementById("draftCompanySelect")?.value || "";
+      const target = parseDraftEntryValue(document.getElementById("draftVersionSelect")?.value || "");
+      if (!companyName || !target) return null;
+      return { companyName, versionNo: target.versionNo };
+    }
+
+    function sanitizeFileNamePart(text) {
+      return String(text || "")
+        .trim()
+        .replace(/[\\/:*?"<>|]/g, "_")
+        .replace(/\s+/g, " ");
+    }
+
+    function buildOutputFileName(data) {
+      const monthNum = Number(String(data.month || "").trim());
+      const dayNum = Number(String(data.day || "").trim());
+      const now = new Date();
+      const mm = Number.isInteger(monthNum) && monthNum >= 1 && monthNum <= 12
+        ? String(monthNum).padStart(2, "0")
+        : String(now.getMonth() + 1).padStart(2, "0");
+      const dd = Number.isInteger(dayNum) && dayNum >= 1 && dayNum <= 31
+        ? String(dayNum).padStart(2, "0")
+        : String(now.getDate()).padStart(2, "0");
+      const target = getSelectedVersionTarget();
+      const versionNo = target && Number.isInteger(target.versionNo) && target.versionNo >= 1 ? target.versionNo : 1;
+      const namePart = data.template_type === "other"
+        ? sanitizeFileNamePart(data.product_name || "产品名称")
+        : sanitizeFileNamePart(data.company_name || "企业名称");
+      return `${mm}${dd}-${namePart}-${versionNo}版.docx`;
+    }
+
+    async function refreshDraftPickers(preferredCompany = "", preferredEntry = "") {
+      const companySelect = document.getElementById("draftCompanySelect");
+      const versionSelect = document.getElementById("draftVersionSelect");
+      if (!companySelect || !versionSelect || !draftLibrary) {
+        updateTopActionState();
+        return null;
+      }
+
+      const companies = await draftLibrary.listCompanies();
+      companySelect.innerHTML = "";
+      if (!companies.length) {
+        companySelect.add(new Option("请选择企业", ""));
+        versionSelect.innerHTML = "";
+        versionSelect.add(new Option("请选择版本", ""));
+        updateTopActionState();
+        return null;
+      }
+
+      companies.forEach((item) => {
+        const label = `${getCompanyDisplayName(item.companyName)}`;
+        companySelect.add(new Option(label, item.companyName));
+      });
+
+      let selectedCompany = preferredCompany || companies[0].companyName;
+      if (!companies.some((item) => item.companyName === selectedCompany)) {
+        selectedCompany = companies[0].companyName;
+      }
+      companySelect.value = selectedCompany;
+
+      const entries = await draftLibrary.listCompanyDrafts(selectedCompany);
+      versionSelect.innerHTML = "";
+      if (!entries.length) {
+        versionSelect.add(new Option("暂无版本", ""));
+        versionSelect.title = "当前企业暂无可用版本";
+        updateTopActionState();
+        return null;
+      }
+
+      entries.forEach((item) => {
+        versionSelect.add(new Option(formatDraftEntryLabel(item), `version:${item.versionNo}`));
+      });
+      versionSelect.title = `当前企业共 ${entries.length} 个版本；系统不做条数截断，会在浏览器可用容量内持续保存`;
+
+      if (preferredEntry && entries.some((item) => `version:${item.versionNo}` === preferredEntry)) {
+        versionSelect.value = preferredEntry;
+      } else {
+        const latest = entries[entries.length - 1];
+        versionSelect.value = `version:${latest.versionNo}`;
+      }
+      const result = {
+        companyName: selectedCompany,
+        entry: versionSelect.value,
+      };
+      updateTopActionState();
+      return result;
+    }
+
+    async function createDraftCompany() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，无法新建企业", "error");
+        return;
+      }
+      const rawName = window.prompt("请输入企业名称", "");
+      if (rawName === null) return;
+      const name = String(rawName || "").trim();
+      if (!name) {
+        setStatus("请先输入企业名称", "error");
+        return;
+      }
+      const all = await draftLibrary.listCompanies();
+      if (all.some((item) => item.companyName === name)) {
+        const versions = await draftLibrary.listCompanyDrafts(name);
+        const latest = versions[versions.length - 1];
+        await refreshDraftPickers(name, `version:${latest.versionNo}`);
+        await loadDraft(true);
+        setStatus(`企业“${name}”已存在，已切换到最新版本`);
+        return;
+      }
+
+      resetFormToBlank();
+      const companyInput = document.getElementById("company_name");
+      if (companyInput) companyInput.value = name;
+      refreshCompetitorBoard();
+
+      const snapshot = buildDraftSnapshot(false);
+      snapshot.saved_mode = "version";
+      snapshot.saved_version_no = 1;
+      try {
+        await draftLibrary.saveVersionDraft(name, 1, snapshot, Number(snapshot.saved_ts) || Date.now());
+      } catch (err) {
+        setStatus(`新建企业失败：${err.message || "写入失败"}`, "error");
+        return;
+      }
+      try {
+        lastSavedSnapshotText = JSON.stringify(snapshot);
+      } catch (_e) {
+        lastSavedSnapshotText = "";
+      }
+      await refreshDraftPickers(name, "version:1");
+      await loadDraft(true);
+      setStatus(`企业“${name}”已创建，当前第1版`);
+      updateDraftMeta(`企业“${name}”已创建，当前第1版`);
+    }
+
+    async function onDraftCompanyChange() {
+      const selectedCompany = document.getElementById("draftCompanySelect")?.value || "";
+      const state = await refreshDraftPickers(selectedCompany, "");
+      if (state) {
+        await loadDraft(true);
+      }
+    }
+
+    async function onDraftVersionChange() {
+      await loadDraft(true);
+    }
+
+    async function onCreateCompanyClick() {
+      return runTopAction("createCompanyBtnTop", "创建中...", () => createDraftCompany());
+    }
+
+    async function onCreateVersionClick() {
+      return runTopAction("createVersionBtnTop", "创建中...", () => createDraftVersion());
+    }
+
+    async function onSaveDraftClick() {
+      return runTopAction("saveDraftBtnTop", "保存中...", () => saveDraft(false));
+    }
+
+    async function onDeleteVersionClick() {
+      return runTopAction("deleteVersionBtnTop", "删除中...", () => deleteSelectedDraft());
+    }
+
+    async function onDeleteCompanyClick() {
+      return runTopAction("deleteCompanyBtnTop", "删除中...", () => deleteSelectedCompany());
+    }
+
+    function bindDraftHotkeys() {
+      document.addEventListener("keydown", (event) => {
+        const key = String(event.key || "").toLowerCase();
+        if ((event.ctrlKey || event.metaKey) && !event.shiftKey && key === "s") {
+          event.preventDefault();
+          onSaveDraftClick();
+        }
+      });
+    }
+
+    function getCurrentCompanyName() {
+      return String(document.getElementById("company_name")?.value || "").trim();
+    }
+
+    function getCompanyDisplayName(companyName) {
+      return ReportDraftLibrary.toDisplayCompanyName(companyName);
+    }
+
+    async function initDraftLibrary() {
+      if (!window.ReportDraftLibrary) {
+        throw new Error("草稿库脚本加载失败");
+      }
+      draftLibrary = ReportDraftLibrary.createBrowserDraftLibrary();
+      await draftLibrary.init();
+    }
+
+    function scheduleAutoSave() {
+      if (autoSaveTimer) clearTimeout(autoSaveTimer);
+      autoSaveTimer = setTimeout(() => {
+        saveDraft(true);
+      }, 800);
+    }
+
+    function safeNum(v) {
+      const n = parseFloat(String(v || "").replace(/,/g, "").trim());
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function isOtherTemplate() {
+      return document.getElementById("template_type").value === "other";
+    }
+
+    function updateChapter1State(message) {
+      const el = document.getElementById("chapter1State");
+      if (!el) return;
+      el.textContent = message || "第一章：尚未生成";
+    }
+
+    function formatApiErrorDetail(err, fallback) {
+      const detail = err && err.detail;
+      if (detail && typeof detail === "object") {
+        const message = detail.message || fallback;
+        return detail.replay_file_path
+          ? `${message} 调试回放文件：${detail.replay_file_path}`
+          : message;
+      }
+      return detail || fallback;
+    }
+
+    function setChapter1RunningState(isRunning) {
+      const otherMode = isOtherTemplate();
+      const stopBtn = document.getElementById("stopChapter1Btn");
+      const regenBtn = document.getElementById("regenChapter1Btn");
+      if (stopBtn) {
+        stopBtn.style.display = otherMode && isRunning ? "inline-block" : "none";
+      }
+      if (regenBtn) {
+        regenBtn.disabled = !!isRunning;
+      }
+    }
+
+    function initDates() {
+      const y = document.getElementById("year");
+      const m = document.getElementById("month");
+      const d = document.getElementById("day");
+      const now = new Date();
+      y.innerHTML = "";
+      m.innerHTML = "";
+      d.innerHTML = "";
+
+      for (let i = 2020; i <= 2035; i++) y.add(new Option(i, i));
+      for (let i = 1; i <= 12; i++) m.add(new Option(i, i));
+      for (let i = 1; i <= 31; i++) d.add(new Option(i, i));
+
+      y.value = String(now.getFullYear());
+      m.value = String(now.getMonth() + 1);
+      d.value = String(now.getDate());
+    }
+
+    function calcMyPct(year) {
+      const sale = safeNum(document.getElementById("sale_" + year).value);
+      const mkt = safeNum(document.getElementById("total_mkt_" + year).value);
+      const pctEl = document.getElementById("pct_" + year);
+
+      if (sale !== null && mkt !== null && mkt > 0) {
+        pctEl.value = ((sale / mkt) * 100).toFixed(2) + "%";
+      } else {
+        pctEl.value = "";
+      }
+      refreshCompetitorBoard();
+      updateProgress();
+    }
+
+    function onMarketInputChange(year) {
+      calcMyPct(year);
+      scheduleAutoSave();
+    }
+
+    function parsePercentRatio(raw) {
+      const text = String(raw || "").trim();
+      if (!text) return null;
+      const cleaned = text.replace(/,/g, "").replace(/%/g, "").trim();
+      const n = Number(cleaned);
+      if (!Number.isFinite(n)) return null;
+      if (text.includes("%")) return n / 100;
+      if (n >= 0 && n <= 1) return n;
+      return n / 100;
+    }
+
+    function numberToChinese(num) {
+      const digits = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+      if (!Number.isInteger(num) || num < 0) return String(num || "");
+      if (num < 10) return digits[num];
+      if (num === 10) return "十";
+      if (num < 20) return "十" + digits[num % 10];
+      if (num < 100) {
+        const tens = Math.floor(num / 10);
+        const ones = num % 10;
+        return digits[tens] + "十" + (ones ? digits[ones] : "");
+      }
+      return String(num);
+    }
+
+    function formatRankText(rankNo) {
+      if (!rankNo) return "";
+      return `第${numberToChinese(rankNo)}名`;
+    }
+
+    function setCompetitorPctFromSale(row, year) {
+      const saleInput = row.querySelector(`.c-s${year}`);
+      const pctInput = row.querySelector(`.c-p${year}`);
+      const sale = safeNum(saleInput?.value);
+      const market = safeNum(document.getElementById(`total_mkt_${year}`)?.value);
+      if (sale === null) {
+        if (pctInput) pctInput.value = "";
+        return;
+      }
+      if (!(market !== null && market > 0)) {
+        if (pctInput) pctInput.value = "";
+        return;
+      }
+      if (pctInput) pctInput.value = ((sale / market) * 100).toFixed(2) + "%";
+    }
+
+    function setCompetitorSaleFromPct(row, year) {
+      const saleInput = row.querySelector(`.c-s${year}`);
+      const pctInput = row.querySelector(`.c-p${year}`);
+      const ratio = parsePercentRatio(pctInput?.value);
+      const market = safeNum(document.getElementById(`total_mkt_${year}`)?.value);
+      if (ratio === null) {
+        if (saleInput) saleInput.value = "";
+        return;
+      }
+      if (!(market !== null && market > 0)) {
+        if (saleInput) saleInput.value = "";
+        return;
+      }
+      if (saleInput) saleInput.value = (market * ratio).toFixed(2);
+    }
+
+    function syncCompetitorRowByPreference(row, year) {
+      const mode = row.dataset[`pref${year}`];
+      const saleInput = row.querySelector(`.c-s${year}`);
+      const pctInput = row.querySelector(`.c-p${year}`);
+      const hasSale = !!String(saleInput?.value || "").trim();
+      const hasPct = !!String(pctInput?.value || "").trim();
+      if (mode === "sale") {
+        setCompetitorPctFromSale(row, year);
+        return;
+      }
+      if (mode === "pct") {
+        setCompetitorSaleFromPct(row, year);
+        return;
+      }
+      if (hasSale) {
+        setCompetitorPctFromSale(row, year);
+        return;
+      }
+      if (hasPct) {
+        setCompetitorSaleFromPct(row, year);
+      }
+    }
+
+    function syncAllCompetitorRowsByYear(year) {
+      document.querySelectorAll("#comp_table tbody tr").forEach((row) => {
+        if (row.classList.contains("self-row")) return;
+        syncCompetitorRowByPreference(row, year);
+      });
+    }
+
+    function competitorInputChanged(input, year, mode) {
+      const row = input.closest("tr");
+      if (!row) return;
+      row.dataset[`pref${year}`] = mode;
+      syncCompetitorRowByPreference(row, year);
+      refreshCompetitorBoard({ sortRows: false });
+      scheduleAutoSave();
+      updateProgress();
+    }
+
+    function ensureSelfCompetitorRow() {
+      const body = document.getElementById("competitorBody");
+      let row = body.querySelector("tr.self-row");
+      if (!row) {
+        row = document.createElement("tr");
+        row.className = "self-row";
+        row.innerHTML = `
+          <td><input class="c-name" readonly /></td>
+          <td><input class="c-s23" readonly /></td>
+          <td><input class="c-p23" readonly /></td>
+          <td><input class="c-r23" readonly /></td>
+          <td><input class="c-s24" readonly /></td>
+          <td><input class="c-p24" readonly /></td>
+          <td><input class="c-r24" readonly /></td>
+          <td><input class="c-s25" readonly /></td>
+          <td><input class="c-p25" readonly /></td>
+          <td><input class="c-r25" readonly /></td>
+        `;
+        body.appendChild(row);
+      }
+      row.querySelector(".c-name").value = (document.getElementById("company_name").value || "").trim() || "（我司）";
+      ["23", "24", "25"].forEach((year) => {
+        row.querySelector(`.c-s${year}`).value = document.getElementById(`sale_${year}`).value || "";
+        row.querySelector(`.c-p${year}`).value = document.getElementById(`pct_${year}`).value || "";
+      });
+      return row;
+    }
+
+    function parseRowYearRatio(row, year) {
+      const input = row.querySelector(`.c-p${year}`);
+      return parsePercentRatio(input ? input.value : "");
+    }
+
+    function computeYearRankMap(rows, year) {
+      const ranked = rows
+        .map((row) => ({ row, ratio: parseRowYearRatio(row, year) }))
+        .filter((item) => item.ratio !== null)
+        .sort((a, b) => b.ratio - a.ratio);
+      const map = new Map();
+      ranked.forEach((item, idx) => map.set(item.row, idx + 1));
+      return map;
+    }
+
+    function sortCompetitorRowsBy2025() {
+      const body = document.getElementById("competitorBody");
+      const rows = Array.from(body.querySelectorAll("tr"));
+      rows.sort((a, b) => {
+        const ra = parseRowYearRatio(a, "25");
+        const rb = parseRowYearRatio(b, "25");
+        if (ra === null && rb === null) return 0;
+        if (ra === null) return 1;
+        if (rb === null) return -1;
+        return rb - ra;
+      });
+      rows.forEach((row) => body.appendChild(row));
+      return rows;
+    }
+
+    function applyRanksToTable(rows) {
+      const rank23 = computeYearRankMap(rows, "23");
+      const rank24 = computeYearRankMap(rows, "24");
+      const rank25 = computeYearRankMap(rows, "25");
+
+      rows.forEach((row) => {
+        const r23 = rank23.get(row) || "";
+        const r24 = rank24.get(row) || "";
+        const r25 = rank25.get(row) || "";
+        const r23Input = row.querySelector(".c-r23");
+        const r24Input = row.querySelector(".c-r24");
+        const r25Input = row.querySelector(".c-r25");
+        if (r23Input) r23Input.value = formatRankText(r23);
+        if (r24Input) r24Input.value = formatRankText(r24);
+        if (r25Input) r25Input.value = formatRankText(r25);
+
+        if (row.classList.contains("self-row")) {
+          document.getElementById("rank_23").value = formatRankText(r23);
+          document.getElementById("rank_24").value = formatRankText(r24);
+          document.getElementById("rank_25").value = formatRankText(r25);
+        }
+      });
+    }
+
+    function refreshCompetitorBoard(options = {}) {
+      const sortRows = options.sortRows !== false;
+      const syncRows = options.syncRows !== false;
+      ensureSelfCompetitorRow();
+      if (syncRows) ["23", "24", "25"].forEach((year) => syncAllCompetitorRowsByYear(year));
+      const rows = sortRows
+        ? sortCompetitorRowsBy2025()
+        : Array.from(document.querySelectorAll("#comp_table tbody tr"));
+      applyRanksToTable(rows);
+    }
+
+    function updateProgress() {
+      const required = [
+        "company_name", "product_name", "product_code", "company_intro", "product_intro", "sale_23", "sale_24", "sale_25"
+      ];
+      let filled = 0;
+      required.forEach((id) => {
+        const val = (document.getElementById(id).value || "").trim();
+        if (val) filled += 1;
+      });
+      const percent = Math.round((filled / required.length) * 100);
+      const progressBar = document.getElementById("progressBar");
+      if (progressBar) progressBar.style.width = percent + "%";
+      const progressText = document.getElementById("progressText");
+      if (progressText) progressText.textContent = percent + "%";
+    }
+
+    function refreshSourceLabels() {
+      const cards = Array.from(document.querySelectorAll("#sources_list .source-card"));
+      cards.forEach((card, idx) => {
+        const label = card.querySelector(".source-layer-label");
+        if (label) label.textContent = `第 ${idx + 1} 层来源`;
+        const chartPrefix = card.querySelector(".chart-prefix");
+        if (chartPrefix) chartPrefix.textContent = `图表${idx + 1}：`;
+      });
+      sourceCount = cards.length;
+    }
+
+    function removeSourceCard(button) {
+      const card = button.closest(".source-card");
+      if (!card) return;
+      card.remove();
+      refreshSourceLabels();
+      syncBusinessMarketScaleFromSources();
+      saveDraft();
+    }
+
+    function addCompetitorRow(prefill, options = {}) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input class="c-name" value="${prefill?.name || ""}">
+            <button class="source-row-remove" type="button" style="position:static;" onclick="removeCompetitorRow(this)">×</button>
+          </div>
+        </td>
+        <td><input class="c-s23" value="${prefill?.sale_23 || prefill?.s23 || ""}" oninput="competitorInputChanged(this, '23', 'sale')" /></td>
+        <td><input class="c-p23" value="${prefill?.p23 || ""}" oninput="competitorInputChanged(this, '23', 'pct')" /></td>
+        <td><input class="c-r23" readonly /></td>
+        <td><input class="c-s24" value="${prefill?.sale_24 || prefill?.s24 || ""}" oninput="competitorInputChanged(this, '24', 'sale')" /></td>
+        <td><input class="c-p24" value="${prefill?.p24 || ""}" oninput="competitorInputChanged(this, '24', 'pct')" /></td>
+        <td><input class="c-r24" readonly /></td>
+        <td><input class="c-s25" value="${prefill?.sale_25 || prefill?.s25 || ""}" oninput="competitorInputChanged(this, '25', 'sale')" /></td>
+        <td><input class="c-p25" value="${prefill?.p25 || ""}" oninput="competitorInputChanged(this, '25', 'pct')" /></td>
+        <td><input class="c-r25" readonly /></td>
+      `;
+      document.getElementById("competitorBody").appendChild(tr);
+      refreshCompetitorBoard({ syncRows: options.syncRows !== false });
+    }
+
+    function removeCompetitorRow(button) {
+      const tr = button.closest("tr");
+      if (!tr) return;
+      tr.remove();
+      refreshCompetitorBoard();
+      resetOtherCompanyLookupState();
+      saveDraft();
+    }
+
+    function refreshOtherLayerLabels() {
+      const cards = Array.from(document.querySelectorAll("#otherLayerList .source-card"));
+      cards.forEach((card, idx) => {
+        const label = card.querySelector(".source-layer-label");
+        if (label) label.textContent = `第 ${idx + 1} 层市场`;
+        const note = card.querySelector(".other-layer-sync-note");
+        if (note) note.textContent = `这一层正文和链接自动复用第 ${idx + 1} 层来源。`;
+      });
+    }
+
+    function addOtherLayer(prefill) {
+      const card = document.createElement("div");
+      card.className = "source-card";
+      card.innerHTML = `
+        <button class="source-del-layer" type="button" onclick="removeOtherLayer(this)">删层</button>
+        <div class="source-layer-label" style="font-size:12px;color:#4e6f64;margin-bottom:6px;">第 1 层市场</div>
+        <div class="field"><label>市场名称</label><input class="other-layer-name" value="${prefill?.name || ""}" /></div>
+        <div class="section-note other-layer-sync-note">这一层正文和链接自动复用第 1 层来源。</div>
+      `;
+      document.getElementById("otherLayerList").appendChild(card);
+      refreshOtherLayerLabels();
+    }
+
+    function removeOtherLayer(button) {
+      const card = button.closest(".source-card");
+      if (!card) return;
+      card.remove();
+      refreshOtherLayerLabels();
+      saveDraft();
+    }
+
+    function addSourceLayer() {
+      addSource();
+      syncBusinessMarketScaleFromSources();
+      saveDraft();
+    }
+
+    function extractChartTitleSuffix(rawTitle) {
+      const text = String(rawTitle || "").trim();
+      if (!text) return "";
+      return text.replace(/^图表\s*\d+\s*[:：]?\s*/, "").trim();
+    }
+
+    function normalizeSourceValues(raw) {
+      const values = Array.isArray(raw) ? raw : [raw];
+      const normalized = [];
+      values.forEach((item) => {
+        const text = String(item || "").trim();
+        if (!text) return;
+        if (!normalized.includes(text)) normalized.push(text);
+      });
+      return normalized;
+    }
+
+    function addSourceMultiInput(button, type, value = "") {
+      const card = button.closest(".source-card");
+      if (!card) return;
+      const list = card.querySelector(type === "name" ? ".source-name-list" : ".source-url-list");
+      if (!list) return;
+      const item = document.createElement("div");
+      item.className = "source-multi-item";
+      const inputClass = type === "name" ? "s-name" : "s-url";
+      item.innerHTML = `
+        <input class="${inputClass}" value="${String(value || "").replace(/"/g, "&quot;")}" />
+        <button class="source-mini-del" type="button" onclick="removeSourceMultiInput(this)">×</button>
+      `;
+      list.appendChild(item);
+    }
+
+    function removeSourceMultiInput(button) {
+      const row = button.closest(".source-multi-item");
+      const list = row?.parentElement;
+      if (!row || !list) return;
+      row.remove();
+      if (!list.querySelector(".source-multi-item")) {
+        const card = list.closest(".source-card");
+        if (!card) return;
+        const addButton = card.querySelector(list.classList.contains("source-name-list") ? ".add-source-name" : ".add-source-url");
+        if (addButton) addSourceMultiInput(addButton, list.classList.contains("source-name-list") ? "name" : "url", "");
+      }
+    }
+
+    function collectSourceMultiValues(card, type) {
+      const selector = type === "name" ? ".s-name" : ".s-url";
+      const values = [];
+      card.querySelectorAll(selector).forEach((input) => {
+        const text = String(input.value || "").trim();
+        if (text) values.push(text);
+      });
+      return values;
+    }
+
+    function addSource(prefill) {
+      const card = document.createElement("div");
+      card.className = "source-card";
+      card.innerHTML = `
+        <button class="source-del-layer" type="button" onclick="removeSourceCard(this)">删层</button>
+        <div class="source-layer-label" style="font-size:12px;color:#4e6f64;margin-bottom:6px;">第 1 层来源</div>
+        <div class="field">
+          <div class="source-field-head">
+            <label>来源名称</label>
+            <button class="source-mini-add add-source-name" type="button" onclick="addSourceMultiInput(this, 'name')">+</button>
+          </div>
+          <div class="source-multi-list source-name-list"></div>
+        </div>
+        <div class="field">
+          <div class="source-field-head">
+            <label>来源网址</label>
+            <button class="source-mini-add add-source-url" type="button" onclick="addSourceMultiInput(this, 'url')">+</button>
+          </div>
+          <div class="source-multi-list source-url-list"></div>
+        </div>
+        <div class="field">
+          <label>图表标题</label>
+          <div class="chart-title-editor">
+            <span class="chart-prefix">图表1：</span>
+            <input class="s-chart-suffix" placeholder="只填写标题后半句，例如：2023-2025年市场规模" />
+          </div>
+        </div>
+        <div class="grid-3">
+          <div class="field"><label>2023年市场规模（亿元）</label><input class="s-c23" placeholder="例如：444.48" /></div>
+          <div class="field"><label>2024年市场规模（亿元）</label><input class="s-c24" placeholder="例如：463.15" /></div>
+          <div class="field"><label>2025年市场规模（亿元）</label><input class="s-c25" placeholder="例如：482.6" /></div>
+        </div>
+        <div class="field"><label>该层来源正文（可粘贴）</label><textarea class="s-quote" style="min-height:95px;" placeholder="可粘贴该层来源原文、摘要或核验说明"></textarea></div>
+      `;
+
+      document.getElementById("sources_list").appendChild(card);
+      refreshSourceLabels();
+
+      const prefillNames = normalizeSourceValues((prefill && prefill.names) || (prefill ? prefill.name : ""));
+      const prefillUrls = normalizeSourceValues((prefill && prefill.urls) || (prefill ? prefill.url : ""));
+      const nameValues = prefillNames.length ? prefillNames : [""];
+      const urlValues = prefillUrls.length ? prefillUrls : [""];
+      const nameBtn = card.querySelector(".add-source-name");
+      const urlBtn = card.querySelector(".add-source-url");
+      nameValues.forEach((value) => addSourceMultiInput(nameBtn, "name", value));
+      urlValues.forEach((value) => addSourceMultiInput(urlBtn, "url", value));
+
+      if (prefill) {
+        card.querySelector(".s-chart-suffix").value = extractChartTitleSuffix(prefill.chart_title || prefill.chart_title_suffix || "");
+        card.querySelector(".s-c23").value = prefill.chart_2023 || "";
+        card.querySelector(".s-c24").value = prefill.chart_2024 || "";
+        card.querySelector(".s-c25").value = prefill.chart_2025 || "";
+        card.querySelector(".s-quote").value = prefill.analysis || "";
+      }
+      syncBusinessMarketScaleFromSources();
+    }
+
+    function collectCompetitors() {
+      const rows = [];
+      document.querySelectorAll("#comp_table tbody tr").forEach((tr) => {
+        if (tr.classList.contains("self-row")) return;
+        rows.push({
+          name: tr.querySelector(".c-name").value,
+          sale_23: tr.querySelector(".c-s23").value,
+          p23: tr.querySelector(".c-p23").value,
+          sale_24: tr.querySelector(".c-s24").value,
+          p24: tr.querySelector(".c-p24").value,
+          sale_25: tr.querySelector(".c-s25").value,
+          p25: tr.querySelector(".c-p25").value,
+        });
+      });
+      return rows;
+    }
+
+    function collectCompetitorNames() {
+      return collectCompetitors().map((x) => (x.name || "").trim()).filter(Boolean);
+    }
+
+    function collectLookupCompanyNames() {
+      const names = [];
+      const selfName = document.getElementById("company_name").value.trim();
+      if (selfName) names.push(selfName);
+      collectCompetitorNames().forEach((name) => {
+        if (name && !names.includes(name)) names.push(name);
+      });
+      return names;
+    }
+
+    function escapeHtml(text) {
+      return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function collectSources(ensureDefault = true) {
+      const list = [];
+      document.querySelectorAll("#sources_list .source-card").forEach((card, idx) => {
+        const suffix = card.querySelector(".s-chart-suffix").value.trim();
+        const names = collectSourceMultiValues(card, "name");
+        const urls = collectSourceMultiValues(card, "url");
+        const block = {
+          name: names[0] || "",
+          names,
+          url: urls[0] || "",
+          urls,
+          chart_title: `图表${idx + 1}：${suffix}`,
+          chart_2023: card.querySelector(".s-c23").value.trim(),
+          chart_2024: card.querySelector(".s-c24").value.trim(),
+          chart_2025: card.querySelector(".s-c25").value.trim(),
+          analysis: card.querySelector(".s-quote").value,
+        };
+        if (block.names.length || block.urls.length || suffix || block.analysis || block.chart_2023 || block.chart_2024 || block.chart_2025) list.push(block);
+      });
+
+      if (ensureDefault && list.length === 0) {
+        list.push({
+          name: "系统默认来源",
+          names: ["系统默认来源"],
+          url: "",
+          urls: [],
+          chart_title: "图表1：市场规模",
+          chart_2023: "",
+          chart_2024: "",
+          chart_2025: "",
+          analysis: "未生成可用正文，请补充可核验数据来源后再生成。",
+        });
+      }
+      return list;
+    }
+
+    function syncBusinessMarketScaleFromSources() {
+      const sources = collectSources(false);
+      const bottom = sources.length ? sources[sources.length - 1] : null;
+      const mapping = [
+        ["23", "chart_2023"],
+        ["24", "chart_2024"],
+        ["25", "chart_2025"],
+      ];
+
+      mapping.forEach(([year, sourceKey]) => {
+        const input = document.getElementById(`total_mkt_${year}`);
+        if (!input) return;
+        const nextValue = bottom ? convertMarketScaleYiToWan(bottom[sourceKey]) : "";
+        if (nextValue && input.value !== nextValue) {
+          input.value = nextValue;
+        }
+        calcMyPct(year);
+      });
+    }
+
+    function resolveEffectiveMarketScale(year, sources) {
+      const input = document.getElementById(`total_mkt_${year}`);
+      const manualValue = String(input?.value || "").trim();
+      const sourceYearKey = `chart_20${year}`;
+      const bottom = Array.isArray(sources) && sources.length ? sources[sources.length - 1] : null;
+      const mappedValue = bottom ? convertMarketScaleYiToWan(bottom[sourceYearKey]) : "";
+      if (mappedValue) return mappedValue;
+      return manualValue;
+    }
+
+    function convertMarketScaleYiToWan(rawValue) {
+      const rawText = String(rawValue || "").replace(/,/g, "").trim();
+      if (!rawText) return "";
+      const yiValue = Number(rawText);
+      if (!Number.isFinite(yiValue)) return "";
+      const wanValue = yiValue * 10000;
+      const rounded = Math.round(wanValue * 10000) / 10000;
+      const text = String(rounded);
+      return text.includes(".") ? text.replace(/\.?0+$/, "") : text;
+    }
+
+    function validateSourceChartData(sources, contextLabel = "数据来源") {
+      if (!Array.isArray(sources) || sources.length === 0) {
+        return { ok: false, message: `请至少添加一层${contextLabel}` };
+      }
+      const years = [
+        { key: "chart_2023", label: "2023 年市场规模" },
+        { key: "chart_2024", label: "2024 年市场规模" },
+        { key: "chart_2025", label: "2025 年市场规模" },
+      ];
+      for (let i = 0; i < sources.length; i += 1) {
+        const row = sources[i] || {};
+        const layerNo = i + 1;
+        for (const year of years) {
+          const raw = String(row[year.key] || "").trim();
+          if (!raw) {
+            return { ok: false, message: `第 ${layerNo} 层${contextLabel}缺少 ${year.label}` };
+          }
+          const num = Number(raw.replace(/,/g, ""));
+          if (!Number.isFinite(num)) {
+            return { ok: false, message: `第 ${layerNo} 层${contextLabel}${year.label}不是有效数字` };
+          }
+        }
+      }
+      return { ok: true };
+    }
+
+    function collectOtherLayers() {
+      const layers = [];
+      document.querySelectorAll("#otherLayerList .source-card").forEach((card) => {
+        const block = {
+          name: card.querySelector(".other-layer-name").value.trim(),
+        };
+        if (block.name) layers.push(block);
+      });
+      return layers;
+    }
+
+    function buildOtherLayersFromSources() {
+      const layers = collectOtherLayers();
+      const sources = collectSources(false);
+      if (!layers.length) {
+        return { ok: false, message: "请先填写第二章市场层级" };
+      }
+      if (sources.length !== layers.length) {
+        return {
+          ok: false,
+          message: `他证第二章有 ${layers.length} 层，数据来源有 ${sources.length} 层，请保持一层市场对应一层来源`,
+        };
+      }
+
+      const merged = [];
+      for (let i = 0; i < layers.length; i += 1) {
+        const layer = layers[i];
+        const source = sources[i] || {};
+        const analysis = String(source.analysis || "").trim();
+        const urls = normalizeSourceValues(source.urls);
+        const fallbackUrl = String(source.url || "").trim();
+        if (fallbackUrl && !urls.includes(fallbackUrl)) urls.unshift(fallbackUrl);
+        const url = urls[0] || "";
+        if (!analysis) {
+          return { ok: false, message: `第 ${i + 1} 层来源正文不能为空，他证第二章会直接复用它` };
+        }
+        if (!url) {
+          return { ok: false, message: `第 ${i + 1} 层来源链接不能为空，他证第五章会直接复用它` };
+        }
+        merged.push({
+          name: layer.name,
+          analysis,
+          url,
+          urls,
+          chart_2023: String(source.chart_2023 || "").trim(),
+          chart_2024: String(source.chart_2024 || "").trim(),
+          chart_2025: String(source.chart_2025 || "").trim(),
+        });
+      }
+      return { ok: true, layers: merged, sources };
+    }
+
+    function resetOtherCompanyLookupState() {
+      const currentDraft = collectManualCompanyProfiles(false).profiles;
+      const currentNames = collectLookupCompanyNames();
+      otherProofResolvedProfiles = currentDraft.filter((item) => {
+        const name = (item.requested_name || item.company_name || "").trim();
+        return currentNames.includes(name);
+      });
+      otherProofPendingCompanies = [];
+      renderCompanyConfirmPanel();
+    }
+
+    function collectManualCompanyProfiles(validate = false) {
+      const rows = [];
+      const cards = document.querySelectorAll("#companyConfirmPanel .confirm-card[data-company-name]");
+      for (const card of cards) {
+        const requestedName = (card.getAttribute("data-company-name") || "").trim();
+        const fieldMap = [
+          ["registered_capital", "注册资本"],
+          ["established_date", "成立日期"],
+          ["legal_representative", "法人代表"],
+          ["company_address", "企业地址"],
+          ["main_business", "主营业务"],
+        ];
+        const profile = {
+          requested_name: requestedName,
+          company_name: requestedName,
+          company_url: "",
+          matched_exactly: false,
+        };
+        for (const [key, label] of fieldMap) {
+          const input = card.querySelector(`[data-field="${key}"]`);
+          const value = input ? input.value.trim() : "";
+          if (validate && !value) {
+            return {
+              ok: false,
+              message: `请先填写“${requestedName}”的${label}`,
+              profiles: [],
+            };
+          }
+          profile[key] = value;
+        }
+        rows.push(profile);
+      }
+      return { ok: true, profiles: rows };
+    }
+
+    function renderCompanyConfirmPanel() {
+      const holder = document.getElementById("companyConfirmPanel");
+      if (!holder) return;
+      const currentNames = collectLookupCompanyNames();
+      otherProofPendingCompanies = [];
+      if (!currentNames.length) {
+        holder.className = "section-note";
+        holder.textContent = "请先填写企业名称和竞争对手，下面会自动展开手动填写表单。";
+        return;
+      }
+
+      const profileMap = new Map();
+      (otherProofResolvedProfiles || []).forEach((item) => {
+        const key = (item.requested_name || item.company_name || "").trim();
+        if (key) profileMap.set(key, item);
+      });
+
+      holder.className = "";
+      holder.innerHTML = currentNames.map((companyName) => {
+        const profile = profileMap.get(companyName) || {};
+        return `
+          <div class="confirm-card" data-company-name="${escapeHtml(companyName)}">
+            <strong>${escapeHtml(companyName)}</strong>
+            <div class="grid-2">
+              <div class="field">
+                <label>注册资本</label>
+                <input data-field="registered_capital" value="${escapeHtml(profile.registered_capital || "")}" placeholder="例如：5188万元" />
+              </div>
+              <div class="field">
+                <label>成立日期</label>
+                <input data-field="established_date" value="${escapeHtml(profile.established_date || "")}" placeholder="例如：2001-10-19" />
+              </div>
+              <div class="field">
+                <label>法人代表</label>
+                <input data-field="legal_representative" value="${escapeHtml(profile.legal_representative || "")}" placeholder="例如：张三" />
+              </div>
+              <div class="field">
+                <label>企业地址</label>
+                <input data-field="company_address" value="${escapeHtml(profile.company_address || "")}" placeholder="例如：浙江省宁波市xx路xx号" />
+              </div>
+            </div>
+            <div class="field" style="margin-top:8px;">
+              <label>主营业务</label>
+              <textarea data-field="main_business" rows="3" placeholder="请填写第三章需要写入的主营业务">${escapeHtml(profile.main_business || "")}</textarea>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function toggleTemplateMode() {
+      const otherMode = isOtherTemplate();
+      document.querySelectorAll(".other-only").forEach((node) => {
+        node.style.display = otherMode ? "" : "none";
+      });
+      document.getElementById("regenChapter1Btn").style.display = otherMode ? "inline-block" : "none";
+      setChapter1RunningState(otherMode && !!otherChapter1AbortController);
+      if (otherMode) {
+        const target = getSelectedVersionTarget();
+        applyCompanyChapter1Cache(target?.companyName || getCurrentCompanyName());
+        renderCompanyConfirmPanel();
+      }
+    }
+
+    function abortOtherChapter1Generation() {
+      if (!otherChapter1AbortController) {
+        setStatus("当前没有正在执行的第一章生成任务");
+        return;
+      }
+      chapter1AbortHappened = true;
+      otherChapter1AbortController.abort();
+      setStatus("第一章生成已终止");
+      updateChapter1State("第一章：已手动终止");
+      setChapter1RunningState(false);
+    }
+
+    async function ensureOtherChapter1(force = false, allowPartial = false) {
+      const product = document.getElementById("product_name").value.trim();
+      if (!product) {
+        setStatus("请先填写主导产品名称", "error");
+        return false;
+      }
+      if (otherChapter1AbortController) {
+        setStatus("第一章正在生成中，请先等待完成或点击“终止第一章生成”", "error");
+        return false;
+      }
+      const target = getSelectedVersionTarget();
+      const companyName = normalizeCompanyCacheKey(target?.companyName || getCurrentCompanyName());
+      if (!companyName) {
+        setStatus("请先选择企业和版本，再生成第一章", "error");
+        return false;
+      }
+      if (!force) {
+        const cached = getOtherChapter1Cache(companyName, product);
+        if (cached) {
+          otherProofChapter1Sections = cached.sections;
+          updateChapter1State(`第一章：已复用企业缓存 ${otherProofChapter1Sections.length} 个小节`);
+          return true;
+        }
+      }
+
+      try {
+        setStatus(force ? "正在重新生成第一章..." : "正在生成第一章...");
+        updateChapter1State("第一章：分 5 个部分生成中");
+        const chapter1RetryTip = "第一章暂未生成完成。系统会保留已成功内容，失败位置写入占位内容，并返回调试回放文件路径。";
+        chapter1AbortHappened = false;
+        otherChapter1AbortController = new AbortController();
+        setChapter1RunningState(true);
+        let resp;
+        try {
+          resp = await fetch("/other-proof/chapter1", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: otherChapter1AbortController.signal,
+            body: JSON.stringify({
+              product_name: product,
+              allow_partial: false,
+            }),
+          });
+        } catch (err) {
+          if (err && err.name === "AbortError") {
+            return false;
+          }
+          updateChapter1State("第一章：生成失败");
+          setStatus(chapter1RetryTip, "error");
+          return false;
+        }
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          updateChapter1State("第一章：生成失败");
+          setStatus(formatApiErrorDetail(err, chapter1RetryTip), "error");
+          return false;
+        }
+
+        const body = await resp.json().catch(() => ({}));
+        const generatedSections = Array.isArray(body && body.sections) ? body.sections : [];
+        const warnings = Array.isArray(body && body.warnings) ? body.warnings : [];
+        const replayFilePath = typeof body.replay_file_path === "string" ? body.replay_file_path : "";
+        if (!generatedSections.length) {
+          updateChapter1State("第一章：生成失败");
+          setStatus(chapter1RetryTip, "error");
+          return false;
+        }
+
+        otherProofChapter1Sections = generatedSections;
+        otherProofChapter1ReplayFilePath = replayFilePath;
+        const hasPlaceholderSection = chapter1SectionsContainPlaceholder(otherProofChapter1Sections);
+        if (hasPlaceholderSection) {
+          clearOtherChapter1Cache(companyName);
+          saveDraft(true);
+          updateChapter1State(`第一章：部分生成 ${otherProofChapter1Sections.length} 个小节，失败位置已占位`);
+          setStatus(
+            replayFilePath
+              ? `第一章部分生成，失败位置已占位，可继续生成 Word；调试回放文件：${replayFilePath}`
+              : "第一章部分生成，失败位置已占位，可继续生成 Word",
+            "error"
+          );
+          return true;
+        } else {
+          setOtherChapter1Cache(companyName, otherProofChapter1Sections, product);
+        }
+        saveDraft(true);
+        if (warnings.length) {
+          updateChapter1State(`第一章：已生成并缓存 ${otherProofChapter1Sections.length} 个小节，部分内容需人工补充`);
+        } else {
+          updateChapter1State(`第一章：已生成并缓存 ${otherProofChapter1Sections.length} 个小节`);
+        }
+        setStatus(replayFilePath ? `第一章已生成；调试回放文件：${replayFilePath}` : "第一章已生成");
+        return true;
+      } catch (_e) {
+        if (_e && _e.name === "AbortError") {
+          return false;
+        }
+        updateChapter1State("第一章：生成失败");
+        setStatus(chapter1RetryTip, "error");
+        return false;
+      } finally {
+        otherChapter1AbortController = null;
+        setChapter1RunningState(false);
+      }
+    }
+
+    async function regenerateOtherChapter1() {
+      if (!isOtherTemplate()) {
+        setStatus("请先切换到“他证模板”后再重新生成第一章", "error");
+        return;
+      }
+      const ok = await ensureOtherChapter1(true, false);
+      if (ok) setStatus("第一章已重新生成");
+    }
+
+    async function resolveOtherCompanies() {
+      const manualProfiles = collectManualCompanyProfiles(true);
+      if (!manualProfiles.ok) {
+        setStatus(manualProfiles.message, "error");
+        return { ok: false, body: null };
+      }
+      otherProofResolvedProfiles = manualProfiles.profiles;
+      renderCompanyConfirmPanel();
+      saveDraft(true);
+      setStatus(`第三章企业基本信息已整理 ${otherProofResolvedProfiles.length} 家`);
+      return { ok: true, body: { resolved: otherProofResolvedProfiles, pending: [] } };
+    }
+
+    async function generate() {
+      syncBusinessMarketScaleFromSources();
+      const company = document.getElementById("company_name").value.trim();
+      const product = document.getElementById("product_name").value.trim();
+      const companyIntro = document.getElementById("company_intro").value.trim();
+      const productIntro = document.getElementById("product_intro").value.trim();
+      const proofScope = document.getElementById("proof_scope").value.trim();
+      const marketName = document.getElementById("market_name").value.trim();
+      const templateType = document.getElementById("template_type").value;
+      const sources = collectSources(false);
+      const sourceCheck = validateSourceChartData(sources, "数据来源");
+      if (!company || !product) {
+        setStatus("请先填写企业名称和主导产品", "error");
+        return;
+      }
+      if (!sourceCheck.ok) {
+        setStatus(sourceCheck.message, "error");
+        return;
+      }
+
+      const mergedIntro = templateType === "self"
+        ? companyIntro
+        : [
+            companyIntro ? `企业介绍：${companyIntro}` : "",
+            productIntro ? `产品介绍：${productIntro}` : "",
+            proofScope ? `市场范围：${proofScope}` : "",
+            marketName ? `市场名称：${marketName}` : "",
+          ].filter(Boolean).join("\n\n");
+
+      const effectiveMarket23 = resolveEffectiveMarketScale("23", sources);
+      const effectiveMarket24 = resolveEffectiveMarketScale("24", sources);
+      const effectiveMarket25 = resolveEffectiveMarketScale("25", sources);
+      const totalMkt23Input = document.getElementById("total_mkt_23");
+      const totalMkt24Input = document.getElementById("total_mkt_24");
+      const totalMkt25Input = document.getElementById("total_mkt_25");
+      if (totalMkt23Input && totalMkt23Input.value !== effectiveMarket23) totalMkt23Input.value = effectiveMarket23;
+      if (totalMkt24Input && totalMkt24Input.value !== effectiveMarket24) totalMkt24Input.value = effectiveMarket24;
+      if (totalMkt25Input && totalMkt25Input.value !== effectiveMarket25) totalMkt25Input.value = effectiveMarket25;
+      ["23", "24", "25"].forEach(calcMyPct);
+
+      const data = {
+        template_type: templateType,
+        province: document.getElementById("province").value,
+        company_name: company,
+        product_name: product,
+        product_code: document.getElementById("product_code").value,
+        year: document.getElementById("year").value,
+        month: document.getElementById("month").value,
+        day: document.getElementById("day").value,
+        intro: mergedIntro,
+
+        sale_23: document.getElementById("sale_23").value,
+        total_mkt_23: effectiveMarket23,
+        pct_23: document.getElementById("pct_23").value,
+        rank_23: document.getElementById("rank_23").value,
+
+        sale_24: document.getElementById("sale_24").value,
+        total_mkt_24: effectiveMarket24,
+        pct_24: document.getElementById("pct_24").value,
+        rank_24: document.getElementById("rank_24").value,
+
+        sale_25: document.getElementById("sale_25").value,
+        total_mkt_25: effectiveMarket25,
+        pct_25: document.getElementById("pct_25").value,
+        rank_25: document.getElementById("rank_25").value,
+
+        sources,
+        competitors: collectCompetitors(),
+      };
+      const activeVersionTarget = getSelectedVersionTarget();
+      data.version_no = activeVersionTarget && Number.isInteger(activeVersionTarget.versionNo) ? activeVersionTarget.versionNo : 1;
+
+      data.company_intro_text = companyIntro;
+      data.proof_scope = proofScope;
+      data.market_name = marketName;
+
+      if (templateType === "other") {
+        if (!companyIntro) {
+          setStatus("他证报告必须填写企业介绍", "error");
+          return;
+        }
+        if (!proofScope) {
+          setStatus("请先填写证明范围", "error");
+          return;
+        }
+        if (!marketName) {
+          setStatus("请先填写测算市场名称", "error");
+          return;
+        }
+        const otherLayerPlan = buildOtherLayersFromSources();
+        if (!otherLayerPlan.ok) {
+          setStatus(otherLayerPlan.message, "error");
+          return;
+        }
+        for (let i = 0; i < otherLayerPlan.layers.length; i += 1) {
+          const layer = otherLayerPlan.layers[i];
+          const layerNo = i + 1;
+          if (!layer.name) {
+            setStatus(`第二章第 ${layerNo} 层市场名称不能为空`, "error");
+            return;
+          }
+        }
+
+        setStatus("正在生成第一章...");
+        const chapter1Ready = await ensureOtherChapter1(false, false);
+        if (!chapter1Ready) {
+          return;
+        }
+
+        setStatus("正在检查第三章企业基本信息...");
+        const lookupResult = await resolveOtherCompanies();
+        if (!lookupResult.ok) {
+          return;
+        }
+
+        data.chapter2_layers = otherLayerPlan.layers;
+        data.chapter1_sections = otherProofChapter1Sections;
+        data.chapter1_replay_file_path = otherProofChapter1ReplayFilePath;
+        data.skip_chapter1 = false;
+        data.resolved_company_profiles = otherProofResolvedProfiles;
+        data.sources = otherLayerPlan.sources;
+      }
+
+      setStatus("正在生成 Word...");
+      try {
+        const r = await fetch("/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          setStatus("Word 生成失败：" + formatApiErrorDetail(err, "未知错误"), "error");
+          return;
+        }
+
+        const blob = await r.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = buildOutputFileName(data);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        const rawWarnings = r.headers.get("X-Generate-Warnings");
+        const rawReplayPath = r.headers.get("X-Chapter1-Replay-File-Path");
+        const replayPath = rawReplayPath ? decodeURIComponent(rawReplayPath) : "";
+        saveDraft(true);
+        if (rawWarnings) {
+          let warnings = [];
+          try {
+            warnings = JSON.parse(decodeURIComponent(rawWarnings));
+          } catch (_e) {
+            warnings = [];
+          }
+          if (warnings.length) {
+            const summary = warnings.slice(0, 3).join("；");
+            const replayText = replayPath ? `；调试回放文件：${replayPath}` : "";
+            setStatus(`Word 已生成，但有 ${warnings.length} 处需要人工补充：${summary}${replayText}`, "error");
+            return;
+          }
+        }
+        setStatus(replayPath ? `Word 生成成功，已开始下载；调试回放文件：${replayPath}` : "Word 生成成功，已开始下载");
+      } catch (_e) {
+        setStatus("网络异常，Word 生成失败", "error");
+      }
+    }
+
+    function buildDraftSnapshot(isAuto = false) {
+      const manualProfiles = collectManualCompanyProfiles(false).profiles;
+      otherProofResolvedProfiles = manualProfiles;
+      return {
+        saved_ts: Date.now(),
+        saved_at: new Date().toISOString(),
+        saved_mode: isAuto ? "auto" : "manual",
+        province: document.getElementById("province").value,
+        company_name: document.getElementById("company_name").value,
+        product_name: document.getElementById("product_name").value,
+        product_code: document.getElementById("product_code").value,
+        year: document.getElementById("year").value,
+        month: document.getElementById("month").value,
+        day: document.getElementById("day").value,
+        company_intro: document.getElementById("company_intro").value,
+        product_intro: document.getElementById("product_intro").value,
+        report_body: document.getElementById("report_body").value,
+        target_scope: document.getElementById("target_scope").value,
+        template_type: document.getElementById("template_type").value,
+        proof_scope: document.getElementById("proof_scope").value,
+        market_name: document.getElementById("market_name").value,
+        sale_23: document.getElementById("sale_23").value,
+        total_mkt_23: document.getElementById("total_mkt_23").value,
+        pct_23: document.getElementById("pct_23").value,
+        rank_23: document.getElementById("rank_23").value,
+
+        sale_24: document.getElementById("sale_24").value,
+        total_mkt_24: document.getElementById("total_mkt_24").value,
+        pct_24: document.getElementById("pct_24").value,
+        rank_24: document.getElementById("rank_24").value,
+
+        sale_25: document.getElementById("sale_25").value,
+        total_mkt_25: document.getElementById("total_mkt_25").value,
+        pct_25: document.getElementById("pct_25").value,
+        rank_25: document.getElementById("rank_25").value,
+
+        competitors: collectCompetitors(),
+        sources: collectSources(false),
+        chapter2_layers: collectOtherLayers(),
+        other_resolved_profiles: manualProfiles,
+        other_pending_companies: otherProofPendingCompanies,
+      };
+    }
+
+    function applyDraftSnapshot(snapshot, sourceLabel = "草稿", silent = false) {
+      if (!snapshot || typeof snapshot !== "object") {
+        if (!silent) setStatus("草稿格式异常，恢复失败", "error");
+        return false;
+      }
+      try {
+        [
+          "province", "company_name", "product_name", "product_code", "year", "month", "day",
+          "company_intro", "product_intro", "report_body", "target_scope", "template_type", "proof_scope", "market_name",
+          "sale_23", "total_mkt_23", "pct_23", "rank_23",
+          "sale_24", "total_mkt_24", "pct_24", "rank_24",
+          "sale_25", "total_mkt_25", "pct_25", "rank_25",
+        ].forEach((key) => {
+          const el = document.getElementById(key);
+          if (el && snapshot[key] != null) {
+            el.value = snapshot[key];
+          }
+        });
+
+        otherProofResolvedProfiles = Array.isArray(snapshot.other_resolved_profiles) ? snapshot.other_resolved_profiles : [];
+        otherProofPendingCompanies = Array.isArray(snapshot.other_pending_companies) ? snapshot.other_pending_companies : [];
+
+        const competitorBody = document.getElementById("competitorBody");
+        competitorBody.innerHTML = "";
+        if (Array.isArray(snapshot.competitors) && snapshot.competitors.length) {
+          snapshot.competitors.forEach((item) => addCompetitorRow(item));
+        } else {
+          addCompetitorRow();
+        }
+        refreshCompetitorBoard();
+
+        const sourceHolder = document.getElementById("sources_list");
+        sourceHolder.innerHTML = "";
+        sourceCount = 0;
+        (snapshot.sources || []).forEach((s) => addSource(s));
+        if (!snapshot.sources || snapshot.sources.length === 0) addSource();
+        syncBusinessMarketScaleFromSources();
+
+        const otherLayerHolder = document.getElementById("otherLayerList");
+        otherLayerHolder.innerHTML = "";
+        if (Array.isArray(snapshot.chapter2_layers) && snapshot.chapter2_layers.length) {
+          snapshot.chapter2_layers.forEach((layer) => addOtherLayer(layer));
+        } else {
+          addOtherLayer();
+        }
+
+        renderCompanyConfirmPanel();
+        toggleTemplateMode();
+        ["23", "24", "25"].forEach(calcMyPct);
+        updateProgress();
+
+        try {
+          lastSavedSnapshotText = JSON.stringify(snapshot);
+        } catch (_e) {
+          lastSavedSnapshotText = "";
+        }
+
+        updateDraftMeta(`${sourceLabel}已恢复`);
+        if (!silent) setStatus(`${sourceLabel}恢复成功`);
+        return true;
+      } catch (_e) {
+        if (!silent) setStatus("草稿格式异常，恢复失败", "error");
+        return false;
+      }
+    }
+
+    async function refreshDraftMetaAtBoot() {
+      const companies = await draftLibrary.listCompanies();
+      if (!companies.length) {
+        updateDraftMeta("未检测到版本，请先新建企业");
+        return;
+      }
+      const totalVersions = companies.reduce((sum, item) => sum + (Number(item.versionCount) || 0), 0);
+      updateDraftMeta(`检测到 ${companies.length} 家企业、${totalVersions} 个版本（不做条数截断）`);
+    }
+
+    function getActiveDraftSelection() {
+      const target = getSelectedVersionTarget();
+      if (!target) {
+        throw new Error("请先新建企业并创建版本，再编辑和保存");
+      }
+      return target;
+    }
+
+    async function saveDraft(isAuto = false) {
+      if (!draftLibrary) {
+        updateDraftMeta("草稿保存失败");
+        setStatus("草稿库未初始化，无法保存", "error");
+        return false;
+      }
+      const snapshot = buildDraftSnapshot(isAuto);
+      let snapshotText = "";
+      try {
+        snapshotText = JSON.stringify(snapshot);
+      } catch (_e) {
+        updateDraftMeta("草稿保存失败");
+        setStatus("草稿保存失败：草稿数据无法序列化", "error");
+        return false;
+      }
+      if (isAuto && snapshotText === lastSavedSnapshotText) {
+        return true;
+      }
+
+      let target = null;
+      try {
+        target = getActiveDraftSelection();
+      } catch (err) {
+        updateDraftMeta("草稿保存失败");
+        setStatus(`草稿保存失败：${err.message || "未选择版本"}`, "error");
+        return false;
+      }
+
+      if (!isAuto) {
+        const currentCompany = getCurrentCompanyName();
+        if (currentCompany && currentCompany !== target.companyName) {
+          setStatus("当前表单企业与顶部选择企业不一致，请先统一后再保存", "error");
+          return false;
+        }
+      }
+
+      try {
+        snapshot.saved_mode = "version";
+        snapshot.saved_version_no = target.versionNo;
+        await draftLibrary.saveVersionDraft(target.companyName, target.versionNo, snapshot, Number(snapshot.saved_ts) || Date.now());
+      } catch (err) {
+        updateDraftMeta("草稿保存失败");
+        setStatus(`草稿保存失败：${err.message || "IndexedDB 写入失败"}`, "error");
+        return false;
+      }
+
+      lastSavedSnapshotText = snapshotText;
+      const now = new Date();
+      const stamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+      updateDraftMeta(`${isAuto ? "自动保存" : "手动保存"} ${stamp}`);
+      await refreshDraftPickers(target.companyName, `version:${target.versionNo}`);
+      updateProgress();
+      return true;
+    }
+
+    async function createDraftVersion() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，无法新建版本", "error");
+        return;
+      }
+      let active = null;
+      try {
+        active = getActiveDraftSelection();
+      } catch (err) {
+        setStatus(err.message || "请先选择版本", "error");
+        return;
+      }
+      const currentCompany = getCurrentCompanyName();
+      if (currentCompany && currentCompany !== active.companyName) {
+        setStatus("当前表单企业与顶部选择企业不一致，请先统一后再新建版本", "error");
+        return;
+      }
+
+      const snapshot = buildDraftSnapshot(false);
+      const nextVersionNo = await draftLibrary.getNextVersionNo(active.companyName);
+      snapshot.saved_mode = "version";
+      snapshot.saved_version_no = nextVersionNo;
+      try {
+        await draftLibrary.saveVersionDraft(active.companyName, nextVersionNo, snapshot, Number(snapshot.saved_ts) || Date.now());
+      } catch (err) {
+        setStatus(`新建版本失败：${err.message || "IndexedDB 写入失败"}`, "error");
+        return;
+      }
+      try {
+        lastSavedSnapshotText = JSON.stringify(snapshot);
+      } catch (_e) {
+        lastSavedSnapshotText = "";
+      }
+      await refreshDraftPickers(active.companyName, `version:${nextVersionNo}`);
+      await loadDraft(true);
+      updateDraftMeta(`${active.companyName} 第${nextVersionNo}版已创建`);
+      setStatus(`${active.companyName} 第${nextVersionNo}版已创建`);
+    }
+
+    async function loadDraft(silent = false) {
+      if (!draftLibrary) {
+        if (!silent) setStatus("草稿库未初始化，无法加载版本", "error");
+        updateTopActionState();
+        return false;
+      }
+      const target = getSelectedVersionTarget();
+      if (!target) {
+        if (!silent) setStatus("请先选择企业和版本", "error");
+        updateTopActionState();
+        return false;
+      }
+      const record = await draftLibrary.getDraft(target.companyName, "version", target.versionNo);
+      if (!record || !record.snapshot) {
+        if (!silent) setStatus("选中的版本不存在或已删除", "error");
+        await refreshDraftPickers(target.companyName, "");
+        updateTopActionState();
+        return false;
+      }
+      const sourceLabel = `${getCompanyDisplayName(target.companyName)}第${target.versionNo}版`;
+      const ok = applyDraftSnapshot(record.snapshot, sourceLabel, silent);
+      if (ok) {
+        applyCompanyChapter1Cache(target.companyName);
+        await refreshDraftPickers(target.companyName, `version:${target.versionNo}`);
+      }
+      updateTopActionState();
+      return ok;
+    }
+
+    async function deleteSelectedDraft() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，无法删除版本", "error");
+        return;
+      }
+      const target = getSelectedVersionTarget();
+      if (!target) {
+        setStatus("请先选择企业和版本", "error");
+        return;
+      }
+      if (!window.confirm(`确认删除 ${getCompanyDisplayName(target.companyName)} 第${target.versionNo}版吗？`)) return;
+      await draftLibrary.deleteVersionDraft(target.companyName, target.versionNo);
+      const remaining = await draftLibrary.listCompanyDrafts(target.companyName);
+      if (!remaining.length) {
+        lastSavedSnapshotText = "";
+        const state = await refreshDraftPickers("", "");
+        if (state) {
+          await loadDraft(true);
+        } else {
+          resetFormToBlank();
+          updateDraftMeta("当前企业已无版本，请新建企业");
+        }
+        setStatus(`${getCompanyDisplayName(target.companyName)} 第${target.versionNo}版已删除`);
+        return;
+      }
+      const latest = remaining[remaining.length - 1];
+      await refreshDraftPickers(target.companyName, `version:${latest.versionNo}`);
+      await loadDraft(true);
+      setStatus(`${getCompanyDisplayName(target.companyName)} 第${target.versionNo}版已删除`);
+    }
+
+    async function deleteSelectedCompany() {
+      if (!draftLibrary) {
+        setStatus("草稿库未初始化，无法删除企业", "error");
+        return;
+      }
+      const companyName = document.getElementById("draftCompanySelect")?.value || "";
+      if (!companyName) {
+        setStatus("请先选择企业", "error");
+        return;
+      }
+      if (!window.confirm(`确认删除企业“${getCompanyDisplayName(companyName)}”的全部版本吗？`)) return;
+      const deletedCount = await draftLibrary.deleteCompany(companyName);
+      clearOtherChapter1Cache(companyName);
+      lastSavedSnapshotText = "";
+      const state = await refreshDraftPickers("", "");
+      if (state) {
+        await loadDraft(true);
+      } else {
+        resetFormToBlank();
+        updateDraftMeta("草稿未保存");
+      }
+      setStatus(`企业“${getCompanyDisplayName(companyName)}”已删除（${deletedCount} 个版本）`);
+    }
+
+    function resetFormToBlank() {
+      otherProofChapter1Sections = [];
+      otherProofResolvedProfiles = [];
+      otherProofPendingCompanies = [];
+
+      const emptyFields = [
+        "province", "company_name", "product_name", "product_code",
+        "company_intro", "product_intro", "report_body", "proof_scope", "market_name",
+        "sale_23", "total_mkt_23", "pct_23", "rank_23",
+        "sale_24", "total_mkt_24", "pct_24", "rank_24",
+        "sale_25", "total_mkt_25", "pct_25", "rank_25",
+      ];
+      emptyFields.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+      });
+
+      document.getElementById("target_scope").value = "CN";
+      document.getElementById("template_type").value = "self";
+      initDates();
+
+      const competitorBody = document.getElementById("competitorBody");
+      competitorBody.innerHTML = "";
+      addCompetitorRow();
+      refreshCompetitorBoard();
+
+      const sourceHolder = document.getElementById("sources_list");
+      sourceHolder.innerHTML = "";
+      sourceCount = 0;
+      addSource();
+      syncBusinessMarketScaleFromSources();
+
+      const otherLayerHolder = document.getElementById("otherLayerList");
+      otherLayerHolder.innerHTML = "";
+      addOtherLayer();
+
+      renderCompanyConfirmPanel();
+      updateChapter1State("第一章：尚未生成");
+      toggleTemplateMode();
+      updateProgress();
+    }
+
+    function bindAutoSave() {
+      document.addEventListener("change", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.matches("input, textarea, select")) {
+          if (target.matches(".s-c23, .s-c24, .s-c25")) {
+            syncBusinessMarketScaleFromSources();
+          }
+          if (target.matches("#company_name, .c-name")) {
+            resetOtherCompanyLookupState();
+          }
+          if (target.matches("#company_name, #sale_23, #sale_24, #sale_25, #pct_23, #pct_24, #pct_25, #total_mkt_23, #total_mkt_24, #total_mkt_25")) {
+            refreshCompetitorBoard();
+          }
+          scheduleAutoSave();
+          updateProgress();
+        }
+      });
+
+      document.addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.matches("input, textarea, select")) {
+          if (target.matches(".s-c23, .s-c24, .s-c25")) {
+            syncBusinessMarketScaleFromSources();
+          }
+          if (target.matches("#company_name, .c-name")) {
+            resetOtherCompanyLookupState();
+          }
+          if (target.matches("#company_name, #sale_23, #sale_24, #sale_25, #pct_23, #pct_24, #pct_25, #total_mkt_23, #total_mkt_24, #total_mkt_25")) {
+            refreshCompetitorBoard();
+          }
+          scheduleAutoSave();
+          updateProgress();
+        }
+      });
+
+      document.addEventListener("blur", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.matches("input, textarea, select")) {
+          saveDraft(true);
+        }
+      }, true);
+    }
+
+    async function bootApp() {
+      loadOtherChapter1CacheFromStorage();
+      initDates();
+      document.getElementById("template_type").addEventListener("change", toggleTemplateMode);
+      addSource();
+      addCompetitorRow();
+      addOtherLayer();
+      refreshCompetitorBoard();
+      bindAutoSave();
+      bindDraftHotkeys();
+      setupUploadDragDrop();
+      toggleTemplateMode();
+      updateProgress();
+
+      try {
+        await initDraftLibrary();
+        await refreshDraftMetaAtBoot();
+        const state = await refreshDraftPickers("", "");
+        if (state) {
+          await loadDraft(true);
+          setStatus("页面已就绪，已载入最新版本");
+        } else {
+          setStatus("页面已就绪，请先新建企业");
+        }
+        updateTopActionState();
+      } catch (err) {
+        updateDraftMeta("草稿库初始化失败");
+        setStatus(`草稿库初始化失败：${err.message || "IndexedDB 不可用"}`, "error");
+        updateTopActionState();
+      }
+    }
+
+    bootApp();
+
+    window.addEventListener("beforeunload", () => {
+      saveDraft(true);
+    });

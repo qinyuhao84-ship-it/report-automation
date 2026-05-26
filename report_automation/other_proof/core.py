@@ -6,20 +6,21 @@ import json
 import re
 import subprocess
 import urllib.parse
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
 import httpx
 
-from chart_docx import (
+from inference import InferenceConfig, LLMOrchestrator
+from report_automation.docx.charts import (
     ChartDataError,
     build_chart_series_from_sources,
     inject_market_charts_into_docx,
 )
-from inference import InferenceConfig, LLMOrchestrator
+
 
 def _register_all_namespaces(xml_content):
     import re
@@ -1496,7 +1497,6 @@ def _apply_layer_structure(body: ET.Element, layer_count: int, *, body_index_del
     layer2_start = 187 + body_index_delta
     layer3_start = 192 + body_index_delta
     layer_end = 199 + body_index_delta
-    block2 = children[layer2_start:layer3_start]
     block3 = children[layer3_start:layer_end]
 
     if layer_count == 1:
